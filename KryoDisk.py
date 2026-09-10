@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.10__15.28.30
+# VERSION: 2026.09.10__16.55.50
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.10__15.28.30"
+APP_VERSION = "2026.09.10__16.55.50"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -248,28 +248,75 @@ def get_drive_media_info(unique_id):
             except Exception:
                 info["media_type_name"] = "No Disc Inserted"
 
+            is_blank = False
             try:
-                info["is_blank"] = bool(data_writer.MediaPhysicallyBlank)
+                is_blank = bool(getattr(data_writer, 'MediaPhysicallyBlank', False) or getattr(data_writer, 'MediaHeuristicallyBlank', False))
             except Exception:
-                info["is_blank"] = False
+                try:
+                    is_blank = bool(data_writer.MediaPhysicallyBlank)
+                except Exception:
+                    is_blank = False
+            info["is_blank"] = is_blank
 
             sector_size = 2048
+            raw_free_sectors = 0
+            raw_total_sectors = 0
             try:
-                free_sectors = int(data_writer.FreeSectorsOnMedia)
-                info["free_capacity_bytes"] = max(0, free_sectors * sector_size)
+                raw_free_sectors = max(0, int(data_writer.FreeSectorsOnMedia))
             except Exception:
-                info["free_capacity_bytes"] = 0
+                raw_free_sectors = 0
 
             try:
-                total_sectors = int(data_writer.TotalSectorsOnMedia)
-                info["total_capacity_bytes"] = max(0, total_sectors * sector_size)
+                raw_total_sectors = max(0, int(data_writer.TotalSectorsOnMedia))
             except Exception:
-                info["total_capacity_bytes"] = 0
+                raw_total_sectors = 0
+
+            media_code = info["media_type_code"]
+            base_name = IMAPI_MEDIA_NAMES.get(media_code, info["media_type_name"])
+            ref_sectors = max(raw_total_sectors, raw_free_sectors)
+
+            # Standard capacity mapping using both media descriptors and sector thresholds
+            if media_code in (17, 18, 19) or "BD" in base_name.upper() or ref_sectors > 5_000_000:
+                if ref_sectors <= 13_000_000:       # BD SL 25GB (23,866 MB / 23.31 GB)
+                    standard_cap = 12_219_392 * sector_size
+                    if "BD" not in base_name.upper():
+                        info["media_type_name"] = "BD-R SL 25GB"
+                elif ref_sectors <= 26_000_000:     # BD DL 50GB (47,732 MB / 46.61 GB)
+                    standard_cap = 24_438_784 * sector_size
+                    if "BD" not in base_name.upper():
+                        info["media_type_name"] = "BD-R DL 50GB"
+                elif ref_sectors <= 52_000_000:     # BD TL 100GB (95,464 MB / 93.23 GB)
+                    standard_cap = 48_877_568 * sector_size
+                    if "BD" not in base_name.upper():
+                        info["media_type_name"] = "BD-R TL 100GB (BDXL)"
+                else:                               # BD QL 128GB (122,192 MB / 119.33 GB)
+                    standard_cap = 62_562_304 * sector_size
+                    if "BD" not in base_name.upper():
+                        info["media_type_name"] = "BD-R QL 128GB (BDXL)"
+
+                info["total_capacity_bytes"] = standard_cap
+                info["free_capacity_bytes"] = standard_cap
+
+            elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13) or "DVD" in base_name.upper() or ref_sectors > 450_000:
+                if media_code in (8, 11, 13) or ref_sectors > 2_500_000: # DVD DL (8.5GB)
+                    standard_cap = 4_171_712 * sector_size
+                else:                                                     # DVD SL (4.7GB)
+                    standard_cap = 2_298_496 * sector_size
+
+                info["total_capacity_bytes"] = standard_cap
+                info["free_capacity_bytes"] = standard_cap
+
+            elif media_code in (1, 2, 3) or "CD" in base_name.upper() or (0 < ref_sectors <= 450_000):
+                standard_cap = 360_000 * sector_size                     # CD 700MB
+                info["total_capacity_bytes"] = standard_cap
+                info["free_capacity_bytes"] = standard_cap
+
+            else:
+                info["total_capacity_bytes"] = max(0, ref_sectors * sector_size)
+                info["free_capacity_bytes"] = info["total_capacity_bytes"]
 
             # Format detailed media designation across all CD, DVD, and Blu-ray formats
-            media_code = info["media_type_code"]
             ref_cap = max(info["total_capacity_bytes"], info["free_capacity_bytes"])
-            base_name = IMAPI_MEDIA_NAMES.get(media_code, info["media_type_name"])
 
             if media_code in (1, 2, 3) or "CD" in base_name.upper():
                 cap_mb = ref_cap / (1024.0 * 1024.0) if ref_cap > 0 else 0
@@ -794,7 +841,7 @@ class DiscTableItem(QTreeWidgetItem):
         return natural_sort_key(self.text(col)) < natural_sort_key(other.text(col))
 
 class DiscBrowserWidget(QWidget):
-    payload_changed = pyqtSignal(int)
+    payload_changed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
