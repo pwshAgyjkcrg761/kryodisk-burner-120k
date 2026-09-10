@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.10__05.27.37
+# VERSION: 2026.09.10__09.55.42
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -72,7 +72,7 @@ import re
 import ctypes
 import ctypes.wintypes
 
-APP_VERSION = "2026.09.10__05.27.37"
+APP_VERSION = "2026.09.10__09.55.42"
 
 def natural_sort_key(s):
     """Sort strings containing numbers in human/natural order safely across types."""
@@ -332,7 +332,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QComboBox, QProgressBar, QHBoxLayout, QListWidget,
                              QTabWidget, QLineEdit, QFormLayout, QTreeWidget,
                              QTreeWidgetItem, QSplitter, QHeaderView, QMenu,
-                             QInputDialog, QTreeView, QAbstractItemView)
+                             QInputDialog, QTreeView, QAbstractItemView,
+                             QStackedWidget)
 from PyQt6.QtGui import (QActionGroup, QPalette, QColor, QIcon, QPixmap, QPainter, 
                          QPen, QFileSystemModel)
 import ctypes
@@ -447,9 +448,32 @@ class PreferencesDialog(QDialog):
 
 import tempfile
 
+import time
+
+IMAPI_ACTION_NAMES = {
+    0: "Validating media...",
+    1: "Formatting media...",
+    2: "Initializing hardware...",
+    3: "Calibrating laser power (OPC)...",
+    4: "Writing data tracks...",
+    5: "Finalizing session & closing tracks...",
+    6: "Burn operation completed.",
+    7: "Verifying data..."
+}
+
+class DiscFormat2DataEvents:
+    """COM Event sink for IMAPI2 MsftDiscFormat2Data progress notifications."""
+    def __init__(self):
+        self.worker = None
+
+    def OnUpdate(self, sender, progress):
+        if self.worker:
+            self.worker.handle_imapi_progress(progress)
+
 class OpticalBurnWorker(QThread):
     status_update = pyqtSignal(str, str)
-    progress_update = pyqtSignal(int, int, str)
+    progress_update = pyqtSignal(int, int, str, int, int)  # current, total, phase_msg, elapsed_sec, remaining_sec
+    log_message = pyqtSignal(str)
     burn_finished = pyqtSignal(bool, str, str)
 
     def __init__(self, drive_id, staged_paths, volume_label="DATA_DISC", eject_when_done=True,
@@ -464,9 +488,90 @@ class OpticalBurnWorker(QThread):
         self.ignore_files = ignore_files
         self.ignore_folders = ignore_folders
         self._is_cancelled = False
+        self._burn_start_time = 0
+        self._finalize_start_time = 0
+        self._total_payload_bytes = 0
+        self._last_logged_action = -1
+        self._speed_samples = []
+        self.data_writer = None
 
     def cancel(self):
         self._is_cancelled = True
+        if self.data_writer:
+            try:
+                self.data_writer.CancelWrite()
+            except Exception:
+                pass
+
+    def log(self, text):
+        t_str = time.strftime("%H:%M:%S")
+        self.log_message.emit(f"[{t_str}] {text}")
+
+    def handle_imapi_progress(self, progress):
+        if self._is_cancelled:
+            return
+        try:
+            now = time.time()
+            current_action = int(getattr(progress, 'CurrentAction', 4))
+            raw_elapsed = int(getattr(progress, 'ElapsedTime', 0))
+            raw_remaining = int(getattr(progress, 'RemainingTime', 0))
+            start_lba = int(getattr(progress, 'StartLba', 0))
+            sector_count = int(getattr(progress, 'SectorCount', 0))
+            last_written = int(getattr(progress, 'LastWrittenLba', 0))
+
+            action_name = IMAPI_ACTION_NAMES.get(current_action, "Writing data tracks...")
+
+            if current_action != self._last_logged_action:
+                self._last_logged_action = current_action
+                self.log(f"Phase: {action_name}")
+                if current_action == 5:
+                    self._finalize_start_time = now
+
+            current_val = 0
+            max_val = max(1, sector_count)
+            speed_str = ""
+            calc_remaining = raw_remaining
+
+            # Calculate dynamic rolling write speed and realistic time remaining
+            if sector_count > 0 and last_written >= start_lba:
+                written_sectors = max(0, last_written - start_lba)
+                current_val = min(written_sectors, sector_count)
+                remaining_sectors = max(0, sector_count - written_sectors)
+
+                # Keep rolling sample window over last 8 seconds
+                self._speed_samples.append((now, written_sectors))
+                self._speed_samples = [s for s in self._speed_samples if now - s[0] <= 8.0]
+
+                if len(self._speed_samples) >= 2:
+                    dt = self._speed_samples[-1][0] - self._speed_samples[0][0]
+                    dsec = self._speed_samples[-1][1] - self._speed_samples[0][1]
+                    if dt > 1.0 and dsec > 0:
+                        rolling_sec_per_s = dsec / dt
+                        mb_per_s = (rolling_sec_per_s * 2048) / (1024 * 1024)
+                        speed_str = f" ({mb_per_s:.1f} MB/s)"
+
+                        if current_action == 4:  # Writing data
+                            # Payload transfer ETA + optical lead-out/finalization overhead
+                            payload_eta = int(remaining_sectors / rolling_sec_per_s)
+                            finalizing_padding = 24 if self.finalize_disc else 15
+                            calc_remaining = max(1, payload_eta + finalizing_padding)
+
+            # Accurate countdown during Lead-out and final session closure
+            if current_action == 5:  # Finalizing session
+                finalizing_dur = 25 if self.finalize_disc else 15
+                elapsed_fin = int(now - (self._finalize_start_time or now))
+                calc_remaining = max(1, finalizing_dur - elapsed_fin)
+                current_val = max_val
+            elif current_action == 6:  # Completed
+                calc_remaining = 0
+                current_val = max_val
+
+            status_text = f"Status: {action_name}{speed_str}"
+            self.status_update.emit(status_text, f"{current_val:,} / {max_val:,} sectors")
+            self.progress_update.emit(current_val, max_val, f"{action_name}{speed_str}", raw_elapsed, calc_remaining)
+
+        except Exception as e:
+            print(f"IMAPI progress callback handling notice: {e}")
 
     def run(self):
         if not HAS_WIN32COM:
@@ -478,6 +583,7 @@ class OpticalBurnWorker(QThread):
         drive_letter = ""
 
         try:
+            self.log("Initializing optical recorder...")
             self.status_update.emit("Status: Initializing IMAPI2 optical recorder...", "")
             
             recorder = win32com.client.Dispatch("IMAPI2.MsftDiscRecorder2")
@@ -486,15 +592,24 @@ class OpticalBurnWorker(QThread):
             mount_points = list(recorder.VolumePathNames)
             drive_letter = mount_points[0] if mount_points else ""
 
-            # 1. Prepare Disc Data Writer
-            data_writer = win32com.client.Dispatch("IMAPI2.MsftDiscFormat2Data")
-            if not data_writer.IsRecorderSupported(recorder):
+            # 1. Prepare Disc Data Writer with COM Event Sink
+            try:
+                self.data_writer = win32com.client.DispatchWithEvents("IMAPI2.MsftDiscFormat2Data", DiscFormat2DataEvents)
+                self.data_writer.worker = self
+            except Exception:
+                self.data_writer = win32com.client.Dispatch("IMAPI2.MsftDiscFormat2Data")
+
+            if not self.data_writer.IsRecorderSupported(recorder):
                 self.burn_finished.emit(False, drive_letter, "The selected recorder does not support data writing.")
                 return
 
-            data_writer.Recorder = recorder
-            data_writer.ClientName = "KryoDisk Burner 120K"
-            data_writer.ForceMediaToBeClosed = bool(self.finalize_disc)
+            self.data_writer.Recorder = recorder
+            self.data_writer.ClientName = "KryoDisk Burner 120K"
+            self.data_writer.ForceMediaToBeClosed = bool(self.finalize_disc)
+
+            self.log(f"Optical Drive: {drive_letter or 'Burner'} (ID: {self.drive_id[:36]}...)")
+            self.log(f"Volume Label: {self.volume_label} | File System: UDF 2.50")
+            self.log(f"Finalize Disc: {'Yes' if self.finalize_disc else 'No (Multisession Open)'}")
 
             # 2. Initialize File System Image targeting UDF 2.50
             self.status_update.emit("Status: Building UDF 2.50 virtual file system...", "")
@@ -508,17 +623,18 @@ class OpticalBurnWorker(QThread):
             # Connect multisession interfaces & import previous sessions if disc contains data
             is_blank = False
             try:
-                is_blank = bool(data_writer.MediaPhysicallyBlank or data_writer.MediaHeuristicallyBlank)
+                is_blank = bool(self.data_writer.MediaPhysicallyBlank or self.data_writer.MediaHeuristicallyBlank)
             except Exception:
                 is_blank = False
 
             if not is_blank:
                 try:
+                    self.log("Existing multisession media detected. Importing session structure...")
                     self.status_update.emit("Status: Importing previous disc session...", "")
-                    fsi.MultisessionInterfaces = data_writer.MultisessionInterfaces
+                    fsi.MultisessionInterfaces = self.data_writer.MultisessionInterfaces
                     fsi.ImportFileSystem()
                 except Exception as ms_err:
-                    print(f"Multisession import notice: {ms_err}")
+                    self.log(f"Multisession import note: {ms_err}")
 
             root_item = fsi.Root
 
@@ -529,8 +645,9 @@ class OpticalBurnWorker(QThread):
                     continue
                 if os.path.isdir(path):
                     dir_name = os.path.basename(path)
+                    dir_size = compute_path_size(path)
+                    self.log(f"Staging directory: {dir_name} ({format_byte_size(dir_size)})")
                     self.status_update.emit(f"Status: Staging folder '{dir_name}'...", path)
-                    # AddTree: adds directory tree into virtual UDF root
                     root_item.AddTree(path, True)
                 else:
                     loose_files.append(path)
@@ -539,9 +656,10 @@ class OpticalBurnWorker(QThread):
                 temp_staging_dir = tempfile.mkdtemp(prefix="kryodisk_staging_")
                 for fpath in loose_files:
                     fname = os.path.basename(fpath)
+                    fsize = os.path.getsize(fpath) if os.path.exists(fpath) else 0
                     dst = os.path.join(temp_staging_dir, fname)
+                    self.log(f"Staging file: {fname} ({format_byte_size(fsize)})")
                     try:
-                        # Use hardlink or fast copy
                         os.link(fpath, dst)
                     except Exception:
                         shutil.copy2(fpath, dst)
@@ -549,40 +667,55 @@ class OpticalBurnWorker(QThread):
                 root_item.AddTree(temp_staging_dir, False)
 
             if self._is_cancelled:
+                self.log("Burn operation cancelled by user before writing.")
                 self.burn_finished.emit(False, drive_letter, "Operation cancelled by user.")
                 return
 
             # 4. Create ISO/UDF result image stream
+            self.log("Generating UDF 2.50 result image stream...")
             self.status_update.emit("Status: Creating disc image stream...", "")
             result_image = fsi.CreateResultImage()
             image_stream = result_image.ImageStream
 
+            total_sectors = int(getattr(result_image, 'TotalBlocks', 0))
+            if total_sectors > 0:
+                total_bytes = total_sectors * 2048
+                self.log(f"Image Stream ready: {total_sectors:,} sectors ({format_byte_size(total_bytes)})")
+
             if hasattr(self, 'requested_speed_sectors') and self.requested_speed_sectors and self.requested_speed_sectors > 0:
                 try:
-                    data_writer.SetWriteSpeed(int(self.requested_speed_sectors), False)
+                    self.data_writer.SetWriteSpeed(int(self.requested_speed_sectors), False)
+                    self.log(f"Configured write speed limit: {self.requested_speed_sectors} sectors/sec")
                 except Exception as speed_err:
-                    print(f"Notice: Setting write speed to {self.requested_speed_sectors} failed: {speed_err}")
+                    self.log(f"Notice: Speed configuration note: {speed_err}")
 
+            self.log("Writing payload to optical media...")
             self.status_update.emit("Status: Writing UDF 2.50 image to disc...", drive_letter)
-            self.progress_update.emit(50, 100, "Burning payload to optical disc...")
+            self._burn_start_time = time.time()
 
             # 5. Execute Write Operation
-            data_writer.Write(image_stream)
+            self.data_writer.Write(image_stream)
 
             if not drive_letter and hasattr(self, 'fallback_drive_letter'):
                 drive_letter = self.fallback_drive_letter
 
+            total_elapsed = int(time.time() - self._burn_start_time)
+            mins, secs = divmod(total_elapsed, 60)
+            self.log(f"Burn writing completed successfully in {mins:02d}:{secs:02d}.")
+
             # 6. Optional tray eject (only if verification is not queued)
             if self.eject_when_done and not getattr(self, 'verify_after', False):
+                self.log("Ejecting disc tray...")
                 self.status_update.emit("Status: Ejecting disc...", drive_letter)
                 try:
                     recorder.EjectMedia()
                 except Exception as e:
-                    print(f"Error ejecting disc: {e}")
+                    self.log(f"Tray eject error: {e}")
 
             self.burn_finished.emit(True, drive_letter, "")
 
         except Exception as e:
+            self.log(f"Burn Error: {e}")
             self.burn_finished.emit(False, drive_letter, str(e))
         finally:
             if temp_staging_dir and os.path.exists(temp_staging_dir):
@@ -1379,9 +1512,72 @@ class KryoDiskBurnerApp(QMainWindow):
         self.btn_run.clicked.connect(self.run_burn)
         layout.addWidget(self.btn_run)
         
-        container = QWidget()
-        container.setLayout(layout)
-        self.setCentralWidget(container)
+        self.staging_widget = QWidget()
+        self.staging_widget.setLayout(layout)
+
+        # Embedded Burn Progress View (Page 1)
+        self.burn_progress_widget = QWidget()
+        burn_vlayout = QVBoxLayout(self.burn_progress_widget)
+        burn_vlayout.setContentsMargins(14, 12, 14, 12)
+        burn_vlayout.setSpacing(6)
+
+        self.lbl_burn_info = QLabel("")
+        self.lbl_burn_info.setStyleSheet("color: #007acc; font-size: 12px;")
+        burn_vlayout.addWidget(self.lbl_burn_info)
+
+        self.lbl_burn_status = QLabel("Status: Initializing...")
+        self.lbl_burn_status.setStyleSheet("font-weight: bold; font-size: 13px;")
+        burn_vlayout.addWidget(self.lbl_burn_status)
+
+        self.burn_progress_bar = QProgressBar()
+        self.burn_progress_bar.setRange(0, 100)
+        self.burn_progress_bar.setValue(0)
+        self.burn_progress_bar.setFixedHeight(20)
+        burn_vlayout.addWidget(self.burn_progress_bar)
+
+        # Time & ETA Indicators Row
+        time_layout = QHBoxLayout()
+        self.lbl_burn_detail = QLabel("")
+        self.lbl_burn_detail.setStyleSheet("color: #888888; font-size: 11px;")
+        time_layout.addWidget(self.lbl_burn_detail)
+        time_layout.addStretch()
+
+        self.lbl_burn_time = QLabel("Elapsed: 00:00  |  Remaining: --:--")
+        self.lbl_burn_time.setStyleSheet("font-size: 11px; font-weight: bold; color: #007acc;")
+        time_layout.addWidget(self.lbl_burn_time)
+        burn_vlayout.addLayout(time_layout)
+
+        # Embedded Scrolling Operation Log
+        lbl_log_title = QLabel("Operation Log:")
+        lbl_log_title.setStyleSheet("font-weight: bold; font-size: 11px; margin-top: 4px;")
+        burn_vlayout.addWidget(lbl_log_title)
+
+        self.txt_burn_log = QTextBrowser()
+        self.txt_burn_log.setStyleSheet("""
+            QTextBrowser {
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                background-color: palette(base);
+                color: palette(text);
+                border: 1px solid #444444;
+                padding: 6px;
+            }
+        """)
+        burn_vlayout.addWidget(self.txt_burn_log, 1)
+
+        # Bottom Cancel Action
+        burn_btn_layout = QHBoxLayout()
+        burn_btn_layout.addStretch()
+        self.btn_burn_cancel = QPushButton("Cancel Burn")
+        self.btn_burn_cancel.setStyleSheet("padding: 5px 22px; font-weight: bold; font-size: 12px;")
+        self.btn_burn_cancel.clicked.connect(self.handle_burn_cancel)
+        burn_btn_layout.addWidget(self.btn_burn_cancel)
+        burn_vlayout.addLayout(burn_btn_layout)
+
+        self.stacked_widget = QStackedWidget()
+        self.stacked_widget.addWidget(self.staging_widget)
+        self.stacked_widget.addWidget(self.burn_progress_widget)
+        self.setCentralWidget(self.stacked_widget)
 
         # Populate drives on initial load
         self.refresh_drives()
@@ -1912,6 +2108,41 @@ class KryoDiskBurnerApp(QMainWindow):
 
         return msg_box.exec()
 
+    def append_burn_log(self, msg):
+        self.txt_burn_log.append(msg)
+        sb = self.txt_burn_log.verticalScrollBar()
+        if sb:
+            sb.setValue(sb.maximum())
+
+    def update_burn_status(self, status_msg, path_detail=""):
+        self.lbl_burn_status.setText(status_msg)
+        if path_detail:
+            metrics = self.lbl_burn_detail.fontMetrics()
+            elided = metrics.elidedText(path_detail, Qt.TextElideMode.ElideMiddle, 360)
+            self.lbl_burn_detail.setText(elided)
+        else:
+            self.lbl_burn_detail.setText("")
+
+    def update_burn_progress(self, current, total, phase_msg, elapsed_sec, remaining_sec):
+        self.burn_progress_bar.setMaximum(total)
+        self.burn_progress_bar.setValue(current)
+        if phase_msg:
+            self.lbl_burn_status.setText(f"Status: {phase_msg}")
+
+        el_m, el_s = divmod(max(0, elapsed_sec), 60)
+        elapsed_str = f"{el_m:02d}:{el_s:02d}"
+
+        if remaining_sec > 0:
+            rem_m, rem_s = divmod(remaining_sec, 60)
+            remaining_str = f"{rem_m:02d}:{rem_s:02d}"
+            tot_m, tot_s = divmod(elapsed_sec + remaining_sec, 60)
+            total_str = f"  |  Total Est: {tot_m:02d}:{tot_s:02d}"
+        else:
+            remaining_str = "--:--"
+            total_str = ""
+
+        self.lbl_burn_time.setText(f"Elapsed: {elapsed_str}  |  Remaining: {remaining_str}{total_str}")
+
     def handle_burn_cancel(self):
         if hasattr(self, 'worker') and self.worker.isRunning():
             reply = self.show_alert(
@@ -1924,9 +2155,9 @@ class KryoDiskBurnerApp(QMainWindow):
             )
             if reply == QMessageBox.StandardButton.Yes:
                 self.worker.cancel()
-                if hasattr(self, 'burn_dialog') and self.burn_dialog:
-                    self.burn_dialog.btn_cancel.setText("Cancelling...")
-                    self.burn_dialog.btn_cancel.setEnabled(False)
+                if hasattr(self, 'btn_burn_cancel'):
+                    self.btn_burn_cancel.setText("Cancelling...")
+                    self.btn_burn_cancel.setEnabled(False)
 
     def run_burn(self):
         drive_id = self.combo_drives.currentData()
@@ -1959,8 +2190,16 @@ class KryoDiskBurnerApp(QMainWindow):
         ignore_files = self.settings.value("ignore_files", DEFAULT_IGNORE_FILES)
         ignore_folders = self.settings.value("ignore_folders", DEFAULT_IGNORE_FOLDERS)
 
-        self.burn_dialog = BurnProgressDialog(vol_label, drive_name, parent=None)
-        self.burn_dialog.cancel_requested.connect(self.handle_burn_cancel)
+        # Prepare Embedded Burn View
+        self.lbl_burn_info.setText(f"<b>Volume:</b> {vol_label} &nbsp;|&nbsp; <b>Drive:</b> {drive_name}")
+        self.lbl_burn_status.setText("Status: Initializing...")
+        self.lbl_burn_detail.setText("")
+        self.lbl_burn_time.setText("Elapsed: 00:00  |  Remaining: --:--")
+        self.txt_burn_log.clear()
+        self.burn_progress_bar.setMaximum(100)
+        self.burn_progress_bar.setValue(0)
+        self.btn_burn_cancel.setText("Cancel Burn")
+        self.btn_burn_cancel.setEnabled(True)
 
         selected_speed_sec = self.combo_speed.currentData()
         finalize_done = self.check_finalize.isChecked()
@@ -1977,12 +2216,12 @@ class KryoDiskBurnerApp(QMainWindow):
         self.worker.fallback_drive_letter = fallback_letter
         self.worker.verify_after = self.check_verify.isChecked()
         self.worker.requested_speed_sectors = selected_speed_sec
-        self.worker.status_update.connect(self.burn_dialog.update_status)
-        self.worker.progress_update.connect(self.burn_dialog.update_progress)
+        self.worker.status_update.connect(self.update_burn_status)
+        self.worker.progress_update.connect(self.update_burn_progress)
+        self.worker.log_message.connect(self.append_burn_log)
         self.worker.burn_finished.connect(self.handle_burn_finished)
 
-        self.hide()
-        self.burn_dialog.show()
+        self.stacked_widget.setCurrentIndex(1)
         self.worker.start()
 
     def locate_kryptdist(self):
@@ -2005,12 +2244,7 @@ class KryoDiskBurnerApp(QMainWindow):
         return None
 
     def handle_burn_finished(self, success, drive_letter, error_msg):
-        if hasattr(self, 'burn_dialog') and self.burn_dialog:
-            self.burn_dialog._allow_close = True
-            self.burn_dialog.close()
-            self.burn_dialog = None
-
-        self.show()
+        self.stacked_widget.setCurrentIndex(0)
 
         if not success:
             self.show_alert("Burn Failed", f"Optical disc burn failed:\n\n{error_msg}", icon_type="error")
