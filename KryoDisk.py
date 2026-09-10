@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.10__09.55.42
+# VERSION: 2026.09.10__11.12.02
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -67,79 +67,18 @@
 import sys
 import os
 import json
-import fnmatch
 import re
 import ctypes
-import ctypes.wintypes
 
-APP_VERSION = "2026.09.10__09.55.42"
+APP_VERSION = "2026.09.10__11.12.02"
 
 def natural_sort_key(s):
     """Sort strings containing numbers in human/natural order safely across types."""
     return [(0, int(t)) if t.isdigit() else (1, t.lower()) for t in re.split(r'(\d+)', str(s))]
 
-DEFAULT_IGNORE_TYPES = "hash,b3,blake3,b2,blake2,blake2b,blake2s,sha512,sha256,sha3,sha3-256,sha3-512,xx3,xxh3,xxh,sha1,sha,md5,sfv,crc32,crc,lnk,url,m3u,m3u8,pls,log,tmp,temp,bak,part,crdownload"
-DEFAULT_IGNORE_FILES = "desktop.ini,folder.jpg,.desktop,.directory,thumbs.db,ehthumbs.db,ehthumbs_vista.db,md5sums,md5sum.txt,sha256sums,sha256sum.txt,sha512sums,sha512sum.txt,checksums.txt,hashes.txt,.DS_Store,._.DS_Store,._*,~$*,pagefile.sys,hiberfil.sys,swapfile.sys,dumpstack.log.tmp"
-DEFAULT_IGNORE_FOLDERS = "RECYCLER,$Recycle.Bin,System Volume Information,.Spotlight-V100,.Trashes,.fseventsd,.Trash-*,__pycache__,.pytest_cache,.git,.svn,.hg,node_modules"
 
-def matches_pattern_list(name, pattern_csv):
-    """Checks if a file/folder name matches any wildcard/extension pattern in a comma-separated string."""
-    if not pattern_csv:
-        return False
-    patterns = [p.strip() for p in pattern_csv.split(",") if p.strip()]
-    name_lower = name.lower()
-    for pat in patterns:
-        pat_lower = pat.lower()
-        if fnmatch.fnmatch(name_lower, pat_lower):
-            return True
-        # Match bare extensions like 'log' against '.log'
-        if not pat_lower.startswith("*") and not pat_lower.startswith("."):
-            if fnmatch.fnmatch(name_lower, f"*.{pat_lower}"):
-                return True
-    return False
 
-def is_ignored(item_name, is_dir=False, ignore_types="", ignore_files="", ignore_folders=""):
-    """Determines whether a file or directory should be ignored based on user rules."""
-    if is_dir:
-        return matches_pattern_list(item_name, ignore_folders)
-    
-    # Check ignored file extensions / types
-    if matches_pattern_list(item_name, ignore_types):
-        return True
-    # Check ignored specific file names / wildcards
-    if matches_pattern_list(item_name, ignore_files):
-        return True
-    return False
 
-def get_user_profile_dir():
-    """Retrieves the user profile directory safely via Win32 API."""
-    buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
-    # CSIDL_PROFILE = 40 (0x0028)
-    if ctypes.windll.shell32.SHGetFolderPathW(None, 40, None, 0, buf) == 0:
-        return buf.value
-    return os.path.expanduser("~")
-
-def get_available_drives():
-    """Enumerates available system drives and returns (path, label) pairs."""
-    drives = []
-    if sys.platform == "win32":
-        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
-        type_names = {
-            2: "Removable",
-            3: "Fixed Disk",
-            4: "Network Drive",
-            5: "Optical Drive",
-            6: "RAM Disk"
-        }
-        for i in range(26):
-            if bitmask & (1 << i):
-                drive_letter = f"{chr(65 + i)}:\\"
-                drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive_letter)
-                desc = type_names.get(drive_type, "Drive")
-                drives.append((drive_letter, f"{drive_letter} ({desc})"))
-    else:
-        drives.append(("/", "/ (Root)"))
-    return drives
 
 import shutil
 import subprocess
@@ -336,7 +275,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QStackedWidget)
 from PyQt6.QtGui import (QActionGroup, QPalette, QColor, QIcon, QPixmap, QPainter, 
                          QPen, QFileSystemModel)
-import ctypes
+
 
 def get_status_pixmap(status="success", size=48):
     """Draws a crisp green checkmark or red X badge for dialog message boxes."""
@@ -401,29 +340,15 @@ class PreferencesDialog(QDialog):
         super().__init__(parent)
         self.parent_app = parent
         self.setWindowTitle("Preferences")
-        self.resize(560, 320)
+        self.resize(420, 160)
 
         main_layout = QVBoxLayout(self)
-        self.tabs = QTabWidget()
 
-        # Tab 1: File Extensions to Ignore (Blank placeholder)
-        ignore_tab = QWidget()
-        ignore_layout = QVBoxLayout(ignore_tab)
-        ignore_layout.addStretch()
-        self.tabs.addTab(ignore_tab, "File Extensions to Ignore")
-
-        # Tab 2: Options
-        options_tab = QWidget()
-        options_layout = QVBoxLayout(options_tab)
         self.chk_disable_sound = QCheckBox("Disable Notification Sounds")
         self.chk_disable_sound.setToolTip("Mutes all audio chimes and notification sounds for completion alerts.")
-        options_layout.addWidget(self.chk_disable_sound)
-        options_layout.addStretch()
+        main_layout.addWidget(self.chk_disable_sound)
+        main_layout.addStretch()
 
-        self.tabs.addTab(options_tab, "Options")
-        main_layout.addWidget(self.tabs)
-
-        # Dialog Buttons
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.save_and_close)
         button_box.rejected.connect(self.reject)
@@ -435,9 +360,6 @@ class PreferencesDialog(QDialog):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
             self.chk_disable_sound.setChecked(s.value("disable_notification_sounds", False))
-
-    def restore_defaults(self):
-        pass
 
     def save_and_close(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
@@ -477,16 +399,13 @@ class OpticalBurnWorker(QThread):
     burn_finished = pyqtSignal(bool, str, str)
 
     def __init__(self, drive_id, staged_paths, volume_label="DATA_DISC", eject_when_done=True,
-                 finalize_disc=True, ignore_types="", ignore_files="", ignore_folders=""):
+                 finalize_disc=True):
         super().__init__()
         self.drive_id = drive_id
         self.staged_paths = staged_paths
         self.volume_label = volume_label or "DATA_DISC"
         self.eject_when_done = eject_when_done
         self.finalize_disc = finalize_disc
-        self.ignore_types = ignore_types
-        self.ignore_files = ignore_files
-        self.ignore_folders = ignore_folders
         self._is_cancelled = False
         self._burn_start_time = 0
         self._finalize_start_time = 0
@@ -727,6 +646,25 @@ class OpticalBurnWorker(QThread):
 
 
 
+
+
+class KryptDistVerifyWorker(QThread):
+    finished = pyqtSignal(bool, int, str)
+    log_message = pyqtSignal(str)
+
+    def __init__(self, kryptdist_path, hash_path):
+        super().__init__()
+        self.kryptdist_path = kryptdist_path
+        self.hash_path = hash_path
+
+    def run(self):
+        try:
+            proc = subprocess.Popen([sys.executable, self.kryptdist_path, self.hash_path])
+            ret = proc.wait()
+            self.finished.emit(ret == 0, ret, self.hash_path)
+        except Exception as e:
+            self.log_message.emit(f"Verification execution error: {e}")
+            self.finished.emit(False, -1, self.hash_path)
 
 
 def compute_path_size(path):
@@ -1124,79 +1062,7 @@ class DiscBrowserWidget(QWidget):
         self.refresh_right_table(self.root_node)
 
 
-class BurnProgressDialog(QDialog):
-    """Dedicated status and progress window shown during optical burning operations."""
-    cancel_requested = pyqtSignal()
 
-    def __init__(self, volume_label, drive_name, parent=None):
-        super().__init__(parent)
-        self._allow_close = False
-        self.setWindowTitle("Burning Optical Disc...")
-        self.resize(520, 200)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
-
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
-
-        layout = QVBoxLayout(self)
-
-        lbl_info = QLabel(f"<b>Volume:</b> {volume_label} &nbsp;|&nbsp; <b>Drive:</b> {drive_name}")
-        lbl_info.setStyleSheet("color: #007acc; font-size: 12px;")
-        layout.addWidget(lbl_info)
-
-        self.lbl_status = QLabel("Status: Initializing...")
-        self.lbl_status.setStyleSheet("font-weight: bold; font-size: 13px;")
-        layout.addWidget(self.lbl_status)
-
-        self.lbl_detail = QLabel("")
-        self.lbl_detail.setStyleSheet("color: #888888; font-size: 11px;")
-        self.lbl_detail.setWordWrap(True)
-        layout.addWidget(self.lbl_detail)
-
-        layout.addSpacing(6)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFixedHeight(20)
-        layout.addWidget(self.progress_bar)
-
-        layout.addSpacing(10)
-
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        self.btn_cancel = QPushButton("Cancel Burn")
-        self.btn_cancel.setStyleSheet("padding: 4px 18px; font-weight: bold;")
-        self.btn_cancel.clicked.connect(self.on_cancel_clicked)
-        btn_layout.addWidget(self.btn_cancel)
-        layout.addLayout(btn_layout)
-
-    def update_status(self, status_msg, path_detail=""):
-        self.lbl_status.setText(status_msg)
-        if path_detail:
-            metrics = self.lbl_detail.fontMetrics()
-            elided = metrics.elidedText(path_detail, Qt.TextElideMode.ElideMiddle, 480)
-            self.lbl_detail.setText(elided)
-        else:
-            self.lbl_detail.setText("")
-
-    def update_progress(self, current, total, phase_msg):
-        self.progress_bar.setMaximum(total)
-        self.progress_bar.setValue(current)
-        if phase_msg:
-            self.lbl_status.setText(f"Status: {phase_msg}")
-
-    def on_cancel_clicked(self):
-        self.cancel_requested.emit()
-
-    def closeEvent(self, event):
-        if self._allow_close:
-            event.accept()
-        else:
-            self.cancel_requested.emit()
-            event.ignore()
 
 
 class AddFilesFoldersDialog(QDialog):
@@ -1429,7 +1295,7 @@ class KryoDiskBurnerApp(QMainWindow):
         # File List Control Buttons
         btn_layout = QHBoxLayout()
         
-        self.btn_add = QPushButton("➕ Add Files & Folders...")
+        self.btn_add = QPushButton("➕ Add Files && Folders...")
         self.btn_add.setStyleSheet("font-weight: bold; padding: 4px 12px;")
         self.btn_add.clicked.connect(self.open_add_dialog)
         btn_layout.addWidget(self.btn_add)
@@ -1784,21 +1650,7 @@ class KryoDiskBurnerApp(QMainWindow):
         self.settings.setValue("theme", self.current_theme)
         event.accept()
 
-    def add_directory(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "Select Directory to Add", self.last_directory)
-        if dir_path:
-            clean_p = os.path.normpath(dir_path).replace('/', os.sep)
-            self.last_directory = clean_p
-            self.settings.setValue("last_directory", self.last_directory)
-            self.path_list.add_paths([clean_p])
-
-    def add_files(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Select Files to Add", self.last_directory)
-        if files:
-            self.last_directory = os.path.normpath(os.path.dirname(files[0])).replace('/', os.sep)
-            self.settings.setValue("last_directory", self.last_directory)
-            files.sort(key=natural_sort_key)
-            self.path_list.add_paths(files)
+    
 
     def remove_selected_path(self):
         self.path_list.remove_selected()
@@ -1816,7 +1668,6 @@ class KryoDiskBurnerApp(QMainWindow):
                 self.path_list.add_paths(selected_paths)
 
     def create_new_folder(self):
-        from PyQt6.QtWidgets import QInputDialog
         target_node = self.path_list.get_current_folder_node()
         folder_name, ok = QInputDialog.getText(self, "New Folder", "Enter new folder name:")
         if ok and folder_name.strip():
@@ -2109,6 +1960,9 @@ class KryoDiskBurnerApp(QMainWindow):
         return msg_box.exec()
 
     def append_burn_log(self, msg):
+        if not (len(msg) >= 10 and msg[0] == '[' and msg[9] == ']' and msg[3] == ':' and msg[6] == ':'):
+            t_str = time.strftime("%H:%M:%S")
+            msg = f"[{t_str}] {msg}"
         self.txt_burn_log.append(msg)
         sb = self.txt_burn_log.verticalScrollBar()
         if sb:
@@ -2158,6 +2012,9 @@ class KryoDiskBurnerApp(QMainWindow):
                 if hasattr(self, 'btn_burn_cancel'):
                     self.btn_burn_cancel.setText("Cancelling...")
                     self.btn_burn_cancel.setEnabled(False)
+        else:
+            self.stacked_widget.setCurrentIndex(0)
+            self.refresh_drives()
 
     def run_burn(self):
         drive_id = self.combo_drives.currentData()
@@ -2186,10 +2043,6 @@ class KryoDiskBurnerApp(QMainWindow):
         drive_name = self.combo_drives.currentText()
         eject_done = self.check_eject.isChecked()
 
-        ignore_types = self.settings.value("ignore_types", DEFAULT_IGNORE_TYPES)
-        ignore_files = self.settings.value("ignore_files", DEFAULT_IGNORE_FILES)
-        ignore_folders = self.settings.value("ignore_folders", DEFAULT_IGNORE_FOLDERS)
-
         # Prepare Embedded Burn View
         self.lbl_burn_info.setText(f"<b>Volume:</b> {vol_label} &nbsp;|&nbsp; <b>Drive:</b> {drive_name}")
         self.lbl_burn_status.setText("Status: Initializing...")
@@ -2211,7 +2064,7 @@ class KryoDiskBurnerApp(QMainWindow):
 
         self.worker = OpticalBurnWorker(
             drive_id, targets, volume_label=vol_label, eject_when_done=eject_done,
-            finalize_disc=finalize_done, ignore_types=ignore_types, ignore_files=ignore_files, ignore_folders=ignore_folders
+            finalize_disc=finalize_done
         )
         self.worker.fallback_drive_letter = fallback_letter
         self.worker.verify_after = self.check_verify.isChecked()
@@ -2243,18 +2096,61 @@ class KryoDiskBurnerApp(QMainWindow):
 
         return None
 
+    def eject_drive(self, drive_id):
+        """Ejects the optical drive tray via IMAPI2."""
+        if not HAS_WIN32COM or not drive_id:
+            return
+        pythoncom.CoInitialize()
+        try:
+            recorder = win32com.client.Dispatch("IMAPI2.MsftDiscRecorder2")
+            recorder.InitializeDiscRecorder(drive_id)
+            recorder.EjectMedia()
+        except Exception as e:
+            self.append_burn_log(f"Tray eject note: {e}")
+        finally:
+            pythoncom.CoUninitialize()
+
+    def on_verify_finished(self, passed, returncode, hash_path, drive_id=None):
+        """Handles the completion of KryptDist post-burn integrity verification."""
+        hash_name = os.path.basename(hash_path) if hash_path else "checksum file"
+        if passed:
+            self.lbl_burn_status.setText("Status: Verification Succeeded (100% Match)")
+            self.append_burn_log(f"[OK] Verification Passed: All files match checksums in '{hash_name}'.")
+            
+            if self.check_eject.isChecked() and drive_id:
+                self.append_burn_log("Ejecting disc tray...")
+                self.eject_drive(drive_id)
+        else:
+            self.lbl_burn_status.setText("Status: Verification Failed (Mismatch or Read Error)")
+            self.append_burn_log(f"[ERROR] Verification Failed (Exit code {returncode}): Checksum mismatch or corruption detected in '{hash_name}'!")
+            self.show_alert(
+                "Verification Failed",
+                f"Burn completed, but post-burn integrity verification failed!\n\n"
+                f"KryptDist reported checksum mismatches or file read errors for: {hash_name}",
+                icon_type="error"
+            )
+        self.refresh_drives()
+
     def handle_burn_finished(self, success, drive_letter, error_msg):
-        self.stacked_widget.setCurrentIndex(0)
+        self.btn_burn_cancel.setText("Back")
+        self.btn_burn_cancel.setEnabled(True)
 
         if not success:
+            self.lbl_burn_status.setText("Status: Burn failed.")
             self.show_alert("Burn Failed", f"Optical disc burn failed:\n\n{error_msg}", icon_type="error")
             self.refresh_drives()
             return
 
+        drive_id = self.combo_drives.currentData()
+
         # Perform Post-Burn Verification via KryptDist if requested
         if self.check_verify.isChecked() and drive_letter:
+            self.lbl_burn_status.setText("Status: Verifying disc with KryptDist...")
+            self.append_burn_log("Scanning disc for checksum manifests for verification...")
             kryptdist_path = self.locate_kryptdist()
             if not kryptdist_path:
+                self.lbl_burn_status.setText("Status: Burn completed (Verification skipped).")
+                self.append_burn_log("Warning: KryptDist.py not found. Verification skipped.")
                 self.show_alert(
                     "Burn Complete",
                     f"Disc burn completed successfully!\n\n"
@@ -2266,7 +2162,6 @@ class KryoDiskBurnerApp(QMainWindow):
                 return
 
             # Find the first .hash container on the disc
-            import time
             disc_root = drive_letter if drive_letter.endswith(os.sep) else f"{drive_letter}\\"
             first_hash_file = None
 
@@ -2288,30 +2183,33 @@ class KryoDiskBurnerApp(QMainWindow):
                 time.sleep(0.5)
 
             if first_hash_file:
-                try:
-                    # Launch KryptDist in OSD mode with the discovered hash container
-                    subprocess.Popen([sys.executable, kryptdist_path, first_hash_file])
-                except Exception as e:
-                    self.show_alert(
-                        "Verification Launch Error",
-                        f"Burn succeeded, but failed to launch KryptDist for verification:\n{e}",
-                        icon_type="warning"
-                    )
+                self.append_burn_log(f"Launching KryptDist verification on: {os.path.basename(first_hash_file)}")
+                self.lbl_burn_status.setText("Status: Verifying disc integrity with KryptDist...")
+                self.verify_worker = KryptDistVerifyWorker(kryptdist_path, first_hash_file)
+                self.verify_worker.log_message.connect(self.append_burn_log)
+                self.verify_worker.finished.connect(
+                    lambda passed, ret, hf: self.on_verify_finished(passed, ret, hf, drive_id)
+                )
+                self.verify_worker.start()
             else:
+                self.lbl_burn_status.setText("Status: Burn completed (No .hash found).")
+                self.append_burn_log("No checksum file found on disc to verify.")
                 self.show_alert(
                     "Burn Complete",
                     "Disc burn completed successfully!\n\n"
                     "No .hash file was found on the burned disc to perform automated verification.",
                     icon_type="info"
                 )
+                self.refresh_drives()
         else:
+            self.lbl_burn_status.setText("Status: Burn completed successfully.")
+            self.append_burn_log("Disc burn completed successfully.")
             self.show_alert(
                 "Burn Complete",
                 "Disc burn completed successfully!",
                 icon_type="success"
             )
-
-        self.refresh_drives()
+            self.refresh_drives()
 
 
 if __name__ == "__main__":
