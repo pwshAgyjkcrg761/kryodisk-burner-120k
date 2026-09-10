@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.10__11.12.02
+# VERSION: 2026.09.10__13.10.15
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,9 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.10__11.12.02"
+APP_VERSION = "2026.09.10__13.10.15"
+
+DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
 def natural_sort_key(s):
     """Sort strings containing numbers in human/natural order safely across types."""
@@ -90,7 +92,7 @@ try:
 except ImportError:
     HAS_WIN32COM = False
 
-# IMAPI2 Media Physical Types
+# IMAPI2 Media Physical Types (IMAPI_MEDIA_PHYSICAL_TYPE)
 IMAPI_MEDIA_NAMES = {
     0: "Unknown Media",
     1: "CD-ROM",
@@ -104,10 +106,14 @@ IMAPI_MEDIA_NAMES = {
     9: "DVD-R",
     10: "DVD-RW",
     11: "DVD-R Dual Layer",
-    12: "HD DVD-ROM",
-    13: "BD-R",
-    14: "BD-RE",
-    15: "BD-ROM"
+    12: "Disk Media",
+    13: "DVD+RW Dual Layer",
+    14: "HD DVD-ROM",
+    15: "HD DVD-R",
+    16: "HD DVD-RAM",
+    17: "BD-ROM",
+    18: "BD-R",
+    19: "BD-RE"
 }
 
 def format_byte_size(num_bytes):
@@ -122,14 +128,16 @@ def get_optical_drives():
     """Enumerates optical disc burner drives connected to the system via Windows IMAPI2."""
     drives = []
     if not HAS_WIN32COM:
-        print("IMAPI2 Error: pywin32 (win32com.client) is not installed.")
+        if DEV_DEBUG:
+            print("IMAPI2 Error: pywin32 (win32com.client) is not installed.")
         return drives
 
     pythoncom.CoInitialize()
     try:
         disc_master = win32com.client.Dispatch("IMAPI2.MsftDiscMaster2")
         count = int(disc_master.Count)
-        print(f"IMAPI2 DiscMaster reports {count} optical drive(s).")
+        if DEV_DEBUG:
+            print(f"IMAPI2 DiscMaster reports {count} optical drive(s).")
 
         for i in range(count):
             unique_id = str(disc_master.Item(i))
@@ -143,9 +151,11 @@ def get_optical_drives():
             except Exception as init_err:
                 err_code = getattr(init_err, 'hresult', None) or (init_err.args[2][5] if len(init_err.args) > 2 and isinstance(init_err.args[2], tuple) else None)
                 if err_code == -2147024891: # 0x80070005 E_ACCESSDENIED
-                    print(f"Access Denied on drive index {i}. Note: Running as Administrator may be required by Windows policy.")
+                    if DEV_DEBUG:
+                        print(f"Access Denied on drive index {i}. Note: Running as Administrator may be required by Windows policy.")
                 else:
-                    print(f"Notice: Initializing by Unique ID failed ({init_err}), trying drive letter fallback...")
+                    if DEV_DEBUG:
+                        print(f"Notice: Initializing by Unique ID failed ({init_err}), trying drive letter fallback...")
 
             # Fallback: scan drive letters (D: through Z:) if unique ID access failed
             if not initialized:
@@ -162,7 +172,8 @@ def get_optical_drives():
                             continue
 
             if not initialized:
-                print(f"Could not initialize optical drive at index {i}.")
+                if DEV_DEBUG:
+                    print(f"Could not initialize optical drive at index {i}.")
                 continue
 
             # Query drive letter(s)
@@ -196,10 +207,12 @@ def get_optical_drives():
                 "letter": drive_letter,
                 "name": drive_name
             })
-            print(f"Successfully detected drive: {drive_name}")
+            if DEV_DEBUG:
+                print(f"Successfully detected drive: {drive_name}")
 
     except Exception as e:
-        print(f"IMAPI2 master initialization error: {e}")
+        if DEV_DEBUG:
+            print(f"IMAPI2 master initialization error: {e}")
     finally:
         pythoncom.CoUninitialize()
     return drives
@@ -253,13 +266,58 @@ def get_drive_media_info(unique_id):
             except Exception:
                 info["total_capacity_bytes"] = 0
 
+            # Format detailed media designation across all CD, DVD, and Blu-ray formats
+            media_code = info["media_type_code"]
+            ref_cap = max(info["total_capacity_bytes"], info["free_capacity_bytes"])
+            base_name = IMAPI_MEDIA_NAMES.get(media_code, info["media_type_name"])
+
+            if media_code in (1, 2, 3) or "CD" in base_name.upper():
+                cap_mb = ref_cap / (1024.0 * 1024.0) if ref_cap > 0 else 0
+                if 0 < cap_mb <= 250.0:
+                    spec = "Mini 210MB"
+                elif cap_mb > 750.0:
+                    spec = f"{int(round(cap_mb / 50.0) * 50)}MB"
+                else:
+                    spec = "700MB"
+                info["media_type_name"] = f"{base_name} {spec}"
+
+            elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13) or "DVD" in base_name.upper():
+                cap_gb = ref_cap / (1024.0 ** 3) if ref_cap > 0 else 0
+                clean_base = base_name.replace(" Dual Layer", "")
+                if 0 < cap_gb <= 1.8:
+                    spec = "Mini SL 1.4GB"
+                elif 1.8 < cap_gb <= 3.2:
+                    spec = "Mini DL 2.8GB"
+                elif media_code in (8, 11, 13) or cap_gb > 5.5:
+                    spec = "DL 8.5GB"
+                elif media_code == 5 and cap_gb > 7.0:
+                    spec = "DS 9.4GB"
+                else:
+                    spec = "SL 4.7GB"
+                info["media_type_name"] = f"{clean_base} {spec}"
+
+            elif media_code in (17, 18, 19) or "BD" in base_name.upper():
+                cap_gb = ref_cap / (1024.0 ** 3) if ref_cap > 0 else 0
+                if 0 < cap_gb <= 10.0:
+                    spec = "Mini 7.5GB"
+                elif cap_gb > 110.0:
+                    spec = "QL 128GB (BDXL)"
+                elif cap_gb > 75.0:
+                    spec = "TL 100GB (BDXL)"
+                elif cap_gb > 35.0:
+                    spec = "DL 50GB"
+                else:
+                    spec = "SL 25GB"
+                info["media_type_name"] = f"{base_name} {spec}"
+
             try:
                 speeds = list(data_writer.SupportedWriteSpeeds)
                 info["supported_speeds_raw"] = sorted(list(set(speeds)), reverse=True)
             except Exception:
                 info["supported_speeds_raw"] = []
     except Exception as e:
-        print(f"IMAPI2 media info query error: {e}")
+        if DEV_DEBUG:
+            print(f"IMAPI2 media info query error: {e}")
     finally:
         pythoncom.CoUninitialize()
     return info
@@ -528,6 +586,8 @@ class OpticalBurnWorker(QThread):
 
             self.log(f"Optical Drive: {drive_letter or 'Burner'} (ID: {self.drive_id[:36]}...)")
             self.log(f"Volume Label: {self.volume_label} | File System: UDF 2.50")
+            if hasattr(self, 'speed_label') and self.speed_label:
+                self.log(f"Write Speed: {self.speed_label}")
             self.log(f"Finalize Disc: {'Yes' if self.finalize_disc else 'No (Multisession Open)'}")
 
             # 2. Initialize File System Image targeting UDF 2.50
@@ -1371,10 +1431,40 @@ class KryoDiskBurnerApp(QMainWindow):
         self.capacity_bar.setFixedHeight(12)
         layout.addWidget(self.capacity_bar)
 
-        # 6. Burn Execution Button
+        # 6. Burn Execution Button with Dual-End Icons
         layout.addSpacing(6)
-        self.btn_run = QPushButton("Burn Disc")
-        self.btn_run.setStyleSheet("font-weight: bold; padding: 7px; font-size: 13px;")
+        self.btn_run = QPushButton()
+        self.btn_run.setStyleSheet("font-weight: bold; padding: 6px; font-size: 13px;")
+
+        btn_inner_layout = QHBoxLayout(self.btn_run)
+        btn_inner_layout.setContentsMargins(8, 2, 8, 2)
+        btn_inner_layout.setSpacing(8)
+        btn_inner_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        btn_icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+
+        if os.path.exists(btn_icon_path):
+            pix_left = QIcon(btn_icon_path).pixmap(18, 18)
+            lbl_ico_left = QLabel()
+            lbl_ico_left.setPixmap(pix_left)
+            lbl_ico_left.setStyleSheet("background: transparent;")
+            lbl_ico_left.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            btn_inner_layout.addWidget(lbl_ico_left)
+
+        lbl_btn_text = QLabel("Burn Disc")
+        lbl_btn_text.setStyleSheet("font-weight: bold; font-size: 13px; background: transparent;")
+        lbl_btn_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        btn_inner_layout.addWidget(lbl_btn_text)
+
+        if os.path.exists(btn_icon_path):
+            pix_right = QIcon(btn_icon_path).pixmap(18, 18)
+            lbl_ico_right = QLabel()
+            lbl_ico_right.setPixmap(pix_right)
+            lbl_ico_right.setStyleSheet("background: transparent;")
+            lbl_ico_right.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            btn_inner_layout.addWidget(lbl_ico_right)
+
         self.btn_run.clicked.connect(self.run_burn)
         layout.addWidget(self.btn_run)
         
@@ -1528,9 +1618,9 @@ class KryoDiskBurnerApp(QMainWindow):
                     continue
                 if media_code in (1, 2, 3):  # CD (75 sectors/sec = 1x)
                     mult = round(s / 75.0)
-                elif media_code in (4, 5, 6, 7, 8, 9, 10, 11):  # DVD (680 sectors/sec = 1x)
+                elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13):  # DVD (680 sectors/sec = 1x)
                     mult = round(s / 680.0)
-                elif media_code in (13, 14, 15):  # BD (2195 sectors/sec = 1x)
+                elif media_code in (17, 18, 19):  # BD (2195 sectors/sec = 1x)
                     mult = round(s / 2195.0)
                 else:
                     mult = round(s / 2195.0)
@@ -1541,9 +1631,9 @@ class KryoDiskBurnerApp(QMainWindow):
 
         # Fallback speeds if disc is absent or drive doesn't report discrete speed descriptors
         if not speed_items:
-            if media_code in (13, 14, 15) or "BD" in media_name.upper():
+            if media_code in (17, 18, 19) or "BD" in media_name.upper():
                 speed_items = [(f"{x}x", int(x * 2195)) for x in [16, 12, 10, 8, 6, 4, 2, 1]]
-            elif media_code in (4, 5, 6, 7, 8, 9, 10, 11) or "DVD" in media_name.upper():
+            elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13) or "DVD" in media_name.upper():
                 speed_items = [(f"{x}x", int(x * 680)) for x in [16, 12, 8, 6, 4, 2, 1]]
             elif media_code in (1, 2, 3) or "CD" in media_name.upper():
                 speed_items = [(f"{x}x", int(x * 75)) for x in [48, 32, 24, 16, 12, 8, 4, 2, 1]]
@@ -1553,7 +1643,7 @@ class KryoDiskBurnerApp(QMainWindow):
         for label, sec in speed_items:
             self.combo_speed.addItem(label, sec)
 
-        is_bd = media_code in (13, 14, 15) or "BD" in media_name.upper()
+        is_bd = media_code in (17, 18, 19) or "BD" in media_name.upper()
         if is_bd:
             idx_4x = self.combo_speed.findText("4x")
             if idx_4x >= 0:
@@ -1897,10 +1987,14 @@ class KryoDiskBurnerApp(QMainWindow):
         """)
         
         about_text = (
-            f"<h1>KryoDisk Burner 120K v{APP_VERSION}</h1>"
+            f"<h1><a href=\"https://git.disroot.org/pwshAgyjkcrg761/kryodisk-burner-120k\" style=\"color: #007acc; text-decoration: none;\">KryoDisk Burner 120K</a> v{APP_VERSION}</h1>"
             "<p>Copyright (C) 2026 <b>pwshAgyjkcrg761</b><br>"
             "Licensed under <b>GPLv3</b></p>"
             "<p>Official License: <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">gnu.org/licenses/gpl-3.0.html</a></p>"
+            "<hr>"
+            "<p><b>Icon Credits:</b><br>"
+            "'Fire SVG Vector' by <a href=\"https://www.svgrepo.com/author/dstore/\">dstore</a> via <a href=\"https://www.svgrepo.com/svg/506715/fire\">SVGRepo</a>.<br>"
+            "Used under CC0 License. Modified by pwshAgyjkcrg761.</p>"
         )
         text_browser.setHtml(about_text)
         layout.addWidget(text_browser)
@@ -2043,8 +2137,10 @@ class KryoDiskBurnerApp(QMainWindow):
         drive_name = self.combo_drives.currentText()
         eject_done = self.check_eject.isChecked()
 
+        speed_label = self.combo_speed.currentText()
+
         # Prepare Embedded Burn View
-        self.lbl_burn_info.setText(f"<b>Volume:</b> {vol_label} &nbsp;|&nbsp; <b>Drive:</b> {drive_name}")
+        self.lbl_burn_info.setText(f"<b>Volume:</b> {vol_label} &nbsp;|&nbsp; <b>Drive:</b> {drive_name} &nbsp;|&nbsp; <b>Speed:</b> {speed_label}")
         self.lbl_burn_status.setText("Status: Initializing...")
         self.lbl_burn_detail.setText("")
         self.lbl_burn_time.setText("Elapsed: 00:00  |  Remaining: --:--")
@@ -2066,6 +2162,7 @@ class KryoDiskBurnerApp(QMainWindow):
             drive_id, targets, volume_label=vol_label, eject_when_done=eject_done,
             finalize_disc=finalize_done
         )
+        self.worker.speed_label = speed_label
         self.worker.fallback_drive_letter = fallback_letter
         self.worker.verify_after = self.check_verify.isChecked()
         self.worker.requested_speed_sectors = selected_speed_sec
