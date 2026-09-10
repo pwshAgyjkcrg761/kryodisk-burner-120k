@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.10__13.10.15
+# VERSION: 2026.09.10__14.40.45
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.10__13.10.15"
+APP_VERSION = "2026.09.10__14.40.45"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -782,6 +782,17 @@ class DiscTreePane(QTreeWidget):
         else:
             super().dropEvent(event)
 
+class DiscTableItem(QTreeWidgetItem):
+    """Custom QTreeWidgetItem that sorts by natural order and raw byte sizes."""
+    def __lt__(self, other):
+        tree = self.treeWidget()
+        col = tree.sortColumn() if tree else 0
+        if col == 1:
+            d1 = self.data(0, Qt.ItemDataRole.UserRole) or {}
+            d2 = other.data(0, Qt.ItemDataRole.UserRole) or {}
+            return d1.get("size_bytes", 0) < d2.get("size_bytes", 0)
+        return natural_sort_key(self.text(col)) < natural_sort_key(other.text(col))
+
 class DiscBrowserWidget(QWidget):
     payload_changed = pyqtSignal(int)
 
@@ -812,6 +823,10 @@ class DiscBrowserWidget(QWidget):
         self.right_table.setColumnWidth(1, 90)
         self.right_table.setColumnWidth(2, 80)
         self.right_table.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        self.right_table.setSortingEnabled(True)
+        self.right_table.header().setSectionsClickable(True)
+        self.right_table.header().setSortIndicatorShown(True)
+        self.right_table.header().setSortIndicator(0, Qt.SortOrder.AscendingOrder)
         self.right_table.files_dropped.connect(self.add_paths)
 
         # Root Disc Node
@@ -864,10 +879,12 @@ class DiscBrowserWidget(QWidget):
             self.left_tree.setCurrentItem(child_node)
 
     def refresh_right_table(self, folder_node=None):
+        self.right_table.setSortingEnabled(False)
         self.right_table.clear()
         if folder_node is None:
             folder_node = self.get_current_folder_node()
         if not folder_node:
+            self.right_table.setSortingEnabled(True)
             return
 
         data = folder_node.data(0, Qt.ItemDataRole.UserRole) or {}
@@ -911,13 +928,15 @@ class DiscBrowserWidget(QWidget):
             
             size_str = format_byte_size(size_b)
 
-            row = QTreeWidgetItem(self.right_table, [
+            row = DiscTableItem(self.right_table, [
                 f"{icon_prefix}{name}",
                 size_str,
                 type_str,
                 orig_path
             ])
             row.setData(0, Qt.ItemDataRole.UserRole, itm)
+
+        self.right_table.setSortingEnabled(True)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -1177,6 +1196,10 @@ class AddFilesFoldersDialog(QDialog):
         self.tree_right = QTreeView()
         self.tree_right.setModel(self.file_model)
         self.tree_right.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree_right.setSortingEnabled(True)
+        self.tree_right.header().setSectionsClickable(True)
+        self.tree_right.header().setSortIndicatorShown(True)
+        self.tree_right.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.tree_right.doubleClicked.connect(self.on_right_item_double_clicked)
         self.tree_right.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.tree_right.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
@@ -1333,9 +1356,21 @@ class KryoDiskBurnerApp(QMainWindow):
         self.btn_refresh_drives.setFixedWidth(32)
         self.btn_refresh_drives.clicked.connect(self.refresh_drives)
         
+        self.btn_eject = QPushButton("⏏")
+        self.btn_eject.setToolTip("Open / Eject Disc Tray")
+        self.btn_eject.setFixedWidth(32)
+        self.btn_eject.clicked.connect(self.open_tray)
+
+        self.btn_close_tray = QPushButton("📥")
+        self.btn_close_tray.setToolTip("Close / Load Disc Tray (Motorized)")
+        self.btn_close_tray.setFixedWidth(32)
+        self.btn_close_tray.clicked.connect(self.close_tray)
+
         drive_layout.addWidget(drive_label)
         drive_layout.addWidget(self.combo_drives, 1)
         drive_layout.addWidget(self.btn_refresh_drives)
+        drive_layout.addWidget(self.btn_eject)
+        drive_layout.addWidget(self.btn_close_tray)
         layout.addLayout(drive_layout)
 
         # Disc Media Info Banner
@@ -1348,8 +1383,6 @@ class KryoDiskBurnerApp(QMainWindow):
 
         self.path_list = DiscBrowserWidget()
         self.path_list.payload_changed.connect(self.update_capacity_meter)
-        if self.target_paths:
-            self.path_list.set_paths(self.target_paths)
         layout.addWidget(self.path_list, 1)
 
         # File List Control Buttons
@@ -1538,6 +1571,9 @@ class KryoDiskBurnerApp(QMainWindow):
         # Populate drives on initial load
         self.refresh_drives()
 
+        if self.target_paths:
+            self.path_list.add_paths(self.target_paths)
+
     def refresh_drives(self):
         self.combo_drives.blockSignals(True)
         self.combo_drives.clear()
@@ -1661,6 +1697,9 @@ class KryoDiskBurnerApp(QMainWindow):
         self.combo_speed.blockSignals(False)
 
     def update_capacity_meter(self, total_bytes=None):
+        if not hasattr(self, 'capacity_bar') or not hasattr(self, 'lbl_capacity'):
+            return
+
         if total_bytes is None:
             total_bytes = self.path_list.get_total_bytes()
             
@@ -2193,6 +2232,70 @@ class KryoDiskBurnerApp(QMainWindow):
 
         return None
 
+    def open_tray(self):
+        """Opens / ejects the optical drive tray."""
+        drive_id = self.combo_drives.currentData()
+        if not drive_id:
+            return
+        self.eject_drive(drive_id)
+
+    def close_tray(self):
+        """Closes / loads the optical drive tray on motorized drives."""
+        drive_id = self.combo_drives.currentData()
+        if not drive_id:
+            return
+        drive_letter = ""
+        for d in getattr(self, 'drives', []):
+            if d.get("id") == drive_id:
+                drive_letter = d.get("letter", "")
+                break
+
+        if drive_letter:
+            letter_clean = drive_letter.rstrip('\\')
+            closed = False
+            try:
+                GENERIC_READ = 0x80000000
+                GENERIC_WRITE = 0x40000000
+                FILE_SHARE_READ = 1
+                FILE_SHARE_WRITE = 2
+                OPEN_EXISTING = 3
+                IOCTL_STORAGE_LOAD_MEDIA = 0x002D480C
+
+                h_device = ctypes.windll.kernel32.CreateFileW(
+                    f"\\\\.\\{letter_clean}",
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    None,
+                    OPEN_EXISTING,
+                    0,
+                    None
+                )
+                if h_device != -1:
+                    bytes_returned = ctypes.c_ulong(0)
+                    res = ctypes.windll.kernel32.DeviceIoControl(
+                        h_device,
+                        IOCTL_STORAGE_LOAD_MEDIA,
+                        None, 0, None, 0,
+                        ctypes.byref(bytes_returned),
+                        None
+                    )
+                    ctypes.windll.kernel32.CloseHandle(h_device)
+                    if res:
+                        closed = True
+            except Exception:
+                pass
+
+            if not closed:
+                try:
+                    alias = f"cdaudio_{letter_clean[0]}"
+                    ctypes.windll.winmm.mciSendStringW(f"open {letter_clean} type cdaudio alias {alias}", None, 0, None)
+                    ctypes.windll.winmm.mciSendStringW(f"set {alias} door closed", None, 0, None)
+                    ctypes.windll.winmm.mciSendStringW(f"close {alias}", None, 0, None)
+                except Exception:
+                    pass
+
+        self.refresh_drives()
+
     def eject_drive(self, drive_id):
         """Ejects the optical drive tray via IMAPI2."""
         if not HAS_WIN32COM or not drive_id:
@@ -2310,6 +2413,23 @@ class KryoDiskBurnerApp(QMainWindow):
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        try:
+            if not ctypes.windll.shell32.IsUserAnAdmin():
+                script_path = os.path.abspath(__file__)
+                script_dir = os.path.dirname(script_path)
+                params = subprocess.list2cmdline([script_path] + sys.argv[1:])
+                py_dir = os.path.dirname(sys.executable)
+                target_exe_name = "python.exe" if DEV_DEBUG else "pythonw.exe"
+                target_exe = os.path.join(py_dir, target_exe_name)
+                executable = target_exe if os.path.exists(target_exe) else sys.executable
+                ret = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", executable, params, script_dir, 1
+                )
+                sys.exit(0 if ret > 32 else 1)
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     window = KryoDiskBurnerApp()
