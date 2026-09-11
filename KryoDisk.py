@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.11__00.49.00
+# VERSION: 2026.09.11__13.20.25
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.11__00.49.00"
+APP_VERSION = "2026.09.11__13.20.25"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -124,8 +124,11 @@ def format_byte_size(num_bytes):
         num_bytes /= 1024.0
     return f"{num_bytes:.2f} PB"
 
-def locate_cdbxpcmd():
-    """Finds cdbxpcmd.exe (CDBurnerXP CLI) across PATH, Registry, internal bin, and tools directories."""
+def locate_cdbxpcmd(custom_path=None):
+    """Finds cdbxpcmd.exe (CDBurnerXP CLI) across custom path, PATH, Registry, internal bin, and tools directories."""
+    if custom_path and os.path.isfile(custom_path):
+        return os.path.normpath(custom_path)
+
     candidate_names = ["cdbxpcmd.exe"]
 
     # 1. Check system PATH
@@ -183,8 +186,11 @@ def locate_cdbxpcmd():
 
     return None
 
-def locate_imgburn():
-    """Finds ImgBurn / ImgBurnPortable executable across PATH, Registry, and tool directories."""
+def locate_imgburn(custom_path=None):
+    """Finds ImgBurn / ImgBurnPortable executable across custom path, PATH, Registry, and tool directories."""
+    if custom_path and os.path.isfile(custom_path):
+        return os.path.normpath(custom_path)
+
     candidate_names = ["ImgBurnPortable.exe", "ImageBurnPortable.exe", "ImgBurn.exe"]
 
     # 1. Check system PATH
@@ -585,14 +591,66 @@ class PreferencesDialog(QDialog):
         super().__init__(parent)
         self.parent_app = parent
         self.setWindowTitle("Preferences")
-        self.resize(420, 160)
+        self.resize(580, 270)
+
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         main_layout = QVBoxLayout(self)
 
+        self.tabs = QTabWidget(self)
+
+        # Tab 1: Options
+        tab_options = QWidget()
+        opt_layout = QVBoxLayout(tab_options)
         self.chk_disable_sound = QCheckBox("Disable Notification Sounds")
         self.chk_disable_sound.setToolTip("Mutes all audio chimes and notification sounds for completion alerts.")
-        main_layout.addWidget(self.chk_disable_sound)
-        main_layout.addStretch()
+        opt_layout.addWidget(self.chk_disable_sound)
+        opt_layout.addStretch()
+        self.tabs.addTab(tab_options, "Options")
+
+        # Tab 2: Engines
+        tab_engines = QWidget()
+        eng_layout = QVBoxLayout(tab_engines)
+
+        # CDBurnerXP CLI
+        lbl_cdbxp = QLabel("<b>CDBurnerXP CLI (cdbxpcmd.exe):</b>")
+        eng_layout.addWidget(lbl_cdbxp)
+        cdbxp_row = QHBoxLayout()
+        self.txt_cdbxp_path = QLineEdit()
+        self.txt_cdbxp_path.setPlaceholderText("Auto-detect (System PATH, Registry, Internal bin, C:\\tools)")
+        self.btn_browse_cdbxp = QPushButton("Browse...")
+        self.btn_browse_cdbxp.clicked.connect(self.browse_cdbxp)
+        self.btn_detect_cdbxp = QPushButton("Auto-Detect")
+        self.btn_detect_cdbxp.clicked.connect(self.auto_detect_cdbxp)
+        cdbxp_row.addWidget(self.txt_cdbxp_path, 1)
+        cdbxp_row.addWidget(self.btn_browse_cdbxp)
+        cdbxp_row.addWidget(self.btn_detect_cdbxp)
+        eng_layout.addLayout(cdbxp_row)
+
+        eng_layout.addSpacing(10)
+
+        # ImgBurn
+        lbl_imgburn = QLabel("<b>ImgBurn / ImgBurnPortable (ImgBurn.exe):</b>")
+        eng_layout.addWidget(lbl_imgburn)
+        imgburn_row = QHBoxLayout()
+        self.txt_imgburn_path = QLineEdit()
+        self.txt_imgburn_path.setPlaceholderText("Auto-detect (System PATH, Registry, Internal bin, C:\\tools)")
+        self.btn_browse_imgburn = QPushButton("Browse...")
+        self.btn_browse_imgburn.clicked.connect(self.browse_imgburn)
+        self.btn_detect_imgburn = QPushButton("Auto-Detect")
+        self.btn_detect_imgburn.clicked.connect(self.auto_detect_imgburn)
+        imgburn_row.addWidget(self.txt_imgburn_path, 1)
+        imgburn_row.addWidget(self.btn_browse_imgburn)
+        imgburn_row.addWidget(self.btn_detect_imgburn)
+        eng_layout.addLayout(imgburn_row)
+
+        eng_layout.addStretch()
+        self.tabs.addTab(tab_engines, "Engines")
+
+        main_layout.addWidget(self.tabs)
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.save_and_close)
@@ -601,15 +659,71 @@ class PreferencesDialog(QDialog):
 
         self.load_values()
 
+    def browse_cdbxp(self):
+        curr = self.txt_cdbxp_path.text().strip() or os.getcwd()
+        start_dir = os.path.dirname(curr) if os.path.isfile(curr) else (curr if os.path.isdir(curr) else os.getcwd())
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select CDBurnerXP CLI (cdbxpcmd.exe)", start_dir, "Executable (cdbxpcmd.exe);;All Files (*.*)"
+        )
+        if path:
+            self.txt_cdbxp_path.setText(os.path.normpath(path))
+
+    def browse_imgburn(self):
+        curr = self.txt_imgburn_path.text().strip() or os.getcwd()
+        start_dir = os.path.dirname(curr) if os.path.isfile(curr) else (curr if os.path.isdir(curr) else os.getcwd())
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select ImgBurn Executable", start_dir, "Executables (*.exe);;All Files (*.*)"
+        )
+        if path:
+            self.txt_imgburn_path.setText(os.path.normpath(path))
+
+    def auto_detect_cdbxp(self):
+        detected = locate_cdbxpcmd()
+        if detected:
+            self.txt_cdbxp_path.setText(detected)
+        else:
+            self.txt_cdbxp_path.clear()
+            self.txt_cdbxp_path.setPlaceholderText("Not found (Auto-detect failed)")
+
+    def auto_detect_imgburn(self):
+        detected = locate_imgburn()
+        if detected:
+            self.txt_imgburn_path.setText(detected)
+        else:
+            self.txt_imgburn_path.clear()
+            self.txt_imgburn_path.setPlaceholderText("Not found (Auto-detect failed)")
+
     def load_values(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
             self.chk_disable_sound.setChecked(s.value("disable_notification_sounds", False))
 
+            saved_cdbxp = s.value("custom_cdbxpcmd_path", "")
+            if saved_cdbxp and os.path.isfile(saved_cdbxp):
+                self.txt_cdbxp_path.setText(os.path.normpath(saved_cdbxp))
+            else:
+                detected = locate_cdbxpcmd()
+                if detected:
+                    self.txt_cdbxp_path.setText(detected)
+
+            saved_imgburn = s.value("custom_imgburn_path", "")
+            if saved_imgburn and os.path.isfile(saved_imgburn):
+                self.txt_imgburn_path.setText(os.path.normpath(saved_imgburn))
+            else:
+                detected = locate_imgburn()
+                if detected:
+                    self.txt_imgburn_path.setText(detected)
+
     def save_and_close(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
             s.setValue("disable_notification_sounds", self.chk_disable_sound.isChecked())
+
+            cdbxp_val = self.txt_cdbxp_path.text().strip()
+            s.setValue("custom_cdbxpcmd_path", cdbxp_val if os.path.isfile(cdbxp_val) else "")
+
+            imgburn_val = self.txt_imgburn_path.text().strip()
+            s.setValue("custom_imgburn_path", imgburn_val if os.path.isfile(imgburn_val) else "")
         self.accept()
 
 
@@ -624,7 +738,8 @@ class OpticalBurnWorker(QThread):
     burn_finished = pyqtSignal(bool, str, str)
 
     def __init__(self, drive_id, drive_letter, staged_paths, volume_label="DATA_DISC",
-                 udf_revision="2.50", eject_when_done=True, finalize_disc=True):
+                 udf_revision="2.50", eject_when_done=True, finalize_disc=True,
+                 custom_cdbxpcmd_path=None, custom_imgburn_path=None):
         super().__init__()
         self.drive_id = drive_id
         self.drive_letter = drive_letter or ""
@@ -633,6 +748,8 @@ class OpticalBurnWorker(QThread):
         self.udf_revision = udf_revision or "2.50"
         self.eject_when_done = eject_when_done
         self.finalize_disc = finalize_disc
+        self.custom_cdbxpcmd_path = custom_cdbxpcmd_path
+        self.custom_imgburn_path = custom_imgburn_path
         self._is_cancelled = False
         self._proc = None
         self.speed_label = "Maximum (Auto)"
@@ -656,10 +773,10 @@ class OpticalBurnWorker(QThread):
         start_time = time.time()
 
         if "cdbxp" in selected_engine:
-            cdbxp_exe = locate_cdbxpcmd()
+            cdbxp_exe = locate_cdbxpcmd(self.custom_cdbxpcmd_path)
             if not cdbxp_exe:
                 # Fallback to ImgBurn if CDBurnerXP not installed
-                img_alt = locate_imgburn()
+                img_alt = locate_imgburn(self.custom_imgburn_path)
                 if img_alt:
                     self.log("cdbxpcmd.exe not found. Falling back to ImgBurn engine.")
                     selected_engine = "imgburn"
@@ -667,13 +784,13 @@ class OpticalBurnWorker(QThread):
                     self.burn_finished.emit(
                         False, target_dest,
                         "CDBurnerXP CLI (cdbxpcmd.exe) could not be found.\n\n"
-                        "Please place 'cdbxpcmd.exe' in 'C:\\tools\\CDBurnerXP\\' or in "
+                        "Please configure its path in Preferences -> Engines, place 'cdbxpcmd.exe' in 'C:\\tools\\CDBurnerXP\\' or in "
                         "'KryoDisk-Burner-120K_internal\\bin\\CDBurnerXP\\', or add it to system PATH."
                     )
                     return
 
         if "cdbxp" in selected_engine:
-            cdbxp_exe = locate_cdbxpcmd()
+            cdbxp_exe = locate_cdbxpcmd(self.custom_cdbxpcmd_path)
             self.log(f"Using Burning Engine: CDBurnerXP CLI ({cdbxp_exe})")
             self.log(f"Optical Drive: {target_dest or 'Default'}")
             self.log(f"Volume Label: {self.volume_label} | Format: UDF")
@@ -708,10 +825,10 @@ class OpticalBurnWorker(QThread):
                 cmd.append("-eject")
 
             # Parse speed
-            if self.speed_label and "x" in self.speed_label.lower():
-                spd_val = self.speed_label.lower().replace("x", "").strip()
-                if spd_val.isdigit():
-                    cmd.append(f"-speed:{spd_val}")
+            if self.speed_label:
+                spd_match = re.search(r'(\d+)\s*x', self.speed_label, re.IGNORECASE)
+                if spd_match:
+                    cmd.append(f"-speed:{spd_match.group(1)}")
 
             # Stage folders and loose files into CDBurnerXP arguments
             for p in self.staged_paths:
@@ -793,12 +910,12 @@ class OpticalBurnWorker(QThread):
             return
 
         # ----------------- ImgBurn Engine Route -----------------
-        imgburn_exe = locate_imgburn()
+        imgburn_exe = locate_imgburn(self.custom_imgburn_path)
         if not imgburn_exe:
             self.burn_finished.emit(
                 False, self.drive_letter,
                 "ImgBurn executable could not be found.\n\n"
-                "Please place ImgBurnPortable in 'C:\\tools\\ImgBurnPortable\\' or in "
+                "Please configure its path in Preferences -> Engines, place ImgBurnPortable in 'C:\\tools\\ImgBurnPortable\\' or in "
                 "'KryoDisk-Burner-120K_internal\\bin\\ImgBurnPortable\\', or add it to system PATH."
             )
             return
@@ -861,10 +978,12 @@ class OpticalBurnWorker(QThread):
                     pass
 
             clean_speed = "MAX"
-            if self.speed_label and "x" in self.speed_label.lower():
-                clean_speed = self.speed_label.lower().replace(" ", "")
-            elif self.speed_label and self.speed_label.isdigit():
-                clean_speed = f"{self.speed_label}x"
+            if self.speed_label:
+                spd_match = re.search(r'(\d+)\s*x', self.speed_label, re.IGNORECASE)
+                if spd_match:
+                    clean_speed = f"{spd_match.group(1)}x"
+                elif self.speed_label.isdigit():
+                    clean_speed = f"{self.speed_label}x"
 
             eject_flag = "YES" if (self.eject_when_done and not self.verify_after) else "NO"
 
@@ -1043,6 +1162,94 @@ class OpticalBurnWorker(QThread):
 
 
 
+
+
+class DiscEraseWorker(QThread):
+    status_update = pyqtSignal(str)
+    log_message = pyqtSignal(str)
+    erase_finished = pyqtSignal(bool, str)
+
+    def __init__(self, drive_id, drive_letter="", custom_cdbxp_path=None):
+        super().__init__()
+        self.drive_id = drive_id
+        self.drive_letter = drive_letter
+        self.custom_cdbxp_path = custom_cdbxp_path
+
+    def run(self):
+        target_dest = self.drive_letter.rstrip('\\')
+        if not target_dest:
+            self.erase_finished.emit(False, "No drive letter specified for erase.")
+            return
+
+        self.log_message.emit(f"Starting Quick Erase on BD-RE/Rewritable drive {target_dest}...")
+
+        # 1. Direct raw sector zeroing of Volume Descriptors (LBA 0 to LBA 2048)
+        wiped_sectors = False
+        try:
+            GENERIC_READ = 0x80000000
+            GENERIC_WRITE = 0x40000000
+            FILE_SHARE_READ = 1
+            FILE_SHARE_WRITE = 2
+            OPEN_EXISTING = 3
+            FSCTL_LOCK_VOLUME = 0x00090018
+            FSCTL_DISMOUNT_VOLUME = 0x00090020
+            FSCTL_UNLOCK_VOLUME = 0x0009001C
+
+            h_dev = ctypes.windll.kernel32.CreateFileW(
+                f"\\\\.\\{target_dest}",
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                0,
+                None
+            )
+            if h_dev != -1:
+                bytes_ret = ctypes.c_ulong(0)
+                ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_LOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+
+                # Overwrite first 4 MB (2,000 sectors of 2048 bytes) with zeroes
+                zero_buf = ctypes.create_string_buffer(2048 * 2000)
+                bytes_written = ctypes.c_ulong(0)
+                res = ctypes.windll.kernel32.WriteFile(h_dev, zero_buf, len(zero_buf), ctypes.byref(bytes_written), None)
+                ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_UNLOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                ctypes.windll.kernel32.CloseHandle(h_dev)
+                if res:
+                    wiped_sectors = True
+                    self.log_message.emit("Primary UDF volume descriptors and anchor pointers zeroed successfully.")
+        except Exception as e:
+            self.log_message.emit(f"Direct raw sector wipe note: {e}")
+
+        # 2. Native Windows Quick Format fallback if raw write was blocked by drive firmware
+        if not wiped_sectors:
+            self.log_message.emit("Performing Windows native UDF quick format...")
+            try:
+                cmd = f"format {target_dest} /FS:UDF /Q /V:DATA_DISC /Y"
+                res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                if res.returncode == 0:
+                    wiped_sectors = True
+                    self.log_message.emit("Native UDF quick format completed successfully.")
+                else:
+                    self.log_message.emit(f"Format output: {res.stdout.strip()} {res.stderr.strip()}")
+            except Exception as fe:
+                self.log_message.emit(f"Native format note: {fe}")
+
+        if wiped_sectors:
+            # Cycle / flush volume
+            try:
+                alias = f"cdaudio_{target_dest[0]}"
+                ctypes.windll.winmm.mciSendStringW(f"open {target_dest} type cdaudio alias {alias}", None, 0, None)
+                ctypes.windll.winmm.mciSendStringW(f"set {alias} door open", None, 0, None)
+                time.sleep(1.0)
+                ctypes.windll.winmm.mciSendStringW(f"set {alias} door closed", None, 0, None)
+                ctypes.windll.winmm.mciSendStringW(f"close {alias}", None, 0, None)
+            except Exception:
+                pass
+
+            self.erase_finished.emit(True, "")
+        else:
+            self.erase_finished.emit(False, "Failed to zero volume descriptors on BD-RE media.")
 
 
 class KryptDistVerifyWorker(QThread):
@@ -1708,6 +1915,12 @@ class KryoDiskBurnerApp(QMainWindow):
         drive_layout.addWidget(self.btn_refresh_drives)
         drive_layout.addWidget(self.btn_eject)
         drive_layout.addWidget(self.btn_close_tray)
+        if DEV_DEBUG:
+            self.btn_erase = QPushButton("🧹")
+            self.btn_erase.setToolTip("Quick Erase Rewritable Disc [DevDebug Mode]")
+            self.btn_erase.setFixedWidth(32)
+            self.btn_erase.clicked.connect(self.erase_disc_quick)
+            drive_layout.addWidget(self.btn_erase)
         layout.addLayout(drive_layout)
 
         # Disc Media Info Banner
@@ -1923,13 +2136,56 @@ class KryoDiskBurnerApp(QMainWindow):
         if self.target_paths:
             self.path_list.add_paths(self.target_paths)
 
-    def on_engine_changed(self, index):
+    def update_filesystem_display(self):
         is_imgburn = "imgburn" in self.combo_engine.currentText().lower()
-        self.combo_udf.setEnabled(is_imgburn)
-        if not is_imgburn:
-            idx = self.combo_udf.findText("UDF 2.50")
-            if idx >= 0:
-                self.combo_udf.setCurrentIndex(idx)
+        self.combo_udf.blockSignals(True)
+        if is_imgburn:
+            current_choice = self.combo_udf.currentText()
+            self.combo_udf.clear()
+            self.combo_udf.addItems(["UDF 2.50", "UDF 2.60"])
+            self.combo_udf.setEnabled(True)
+            self.combo_udf.setToolTip("Select Universal Disk Format revision (UDF 2.50 standard or UDF 2.60)")
+            saved_udf = self.settings.value("udf_revision", "UDF 2.50")
+            idx = self.combo_udf.findText(current_choice if current_choice in ("UDF 2.50", "UDF 2.60") else saved_udf)
+            self.combo_udf.setCurrentIndex(idx if idx >= 0 else 0)
+
+            self.check_finalize.blockSignals(True)
+            self.check_finalize.setChecked(True)
+            self.check_finalize.setEnabled(False)
+            self.check_finalize.setToolTip("ImgBurn builds and finalizes the disc session automatically.")
+            self.check_finalize.blockSignals(False)
+        else:
+            media_code = getattr(self, 'current_media_info', {}).get("media_type_code", 0)
+            media_name = getattr(self, 'current_media_info', {}).get("media_type_name", "")
+
+            if media_code in (17, 18, 19) or "BD" in media_name.upper():
+                fs_label = "UDF 2.50 (Forced)"
+            elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13) or "DVD" in media_name.upper():
+                fs_label = "ISO/UDF Bridge 1.02 (Forced)"
+            elif media_code in (1, 2, 3) or "CD" in media_name.upper():
+                fs_label = "UDF Engine Default (Forced)"
+            else:
+                fs_label = "UDF (Forced)"
+
+            self.combo_udf.clear()
+            self.combo_udf.addItem(fs_label)
+            self.combo_udf.setEnabled(False)
+            self.combo_udf.setToolTip("CDBurnerXP forces UDF automatically based on media format.")
+
+            self.check_finalize.blockSignals(True)
+            if DEV_DEBUG:
+                self.check_finalize.setEnabled(True)
+                self.check_finalize.setChecked(self.settings.value("finalize_disc", True))
+                self.check_finalize.setToolTip("Closes and finalizes the disc. Leave unchecked to allow burning additional sessions later (multisession). [DevDebug Mode]")
+            else:
+                self.check_finalize.setChecked(True)
+                self.check_finalize.setEnabled(False)
+                self.check_finalize.setToolTip("Disc is automatically finalized to ensure maximum compatibility and prevent hidden sessions.")
+            self.check_finalize.blockSignals(False)
+        self.combo_udf.blockSignals(False)
+
+    def on_engine_changed(self, index):
+        self.update_filesystem_display()
 
     def refresh_drives(self):
         self.combo_drives.blockSignals(True)
@@ -1966,6 +2222,7 @@ class KryoDiskBurnerApp(QMainWindow):
             self.lbl_disc_info.setStyleSheet("color: #dc3545; font-weight: bold;")
             self.update_write_speeds()
             self.update_capacity_meter()
+            self.update_filesystem_display()
             return
 
         self.current_media_info = get_drive_media_info(drive_id)
@@ -1973,8 +2230,11 @@ class KryoDiskBurnerApp(QMainWindow):
         is_blank = self.current_media_info["is_blank"]
         free_bytes = self.current_media_info["free_capacity_bytes"]
         
+        self.update_write_speeds()
+        rec_str = f" | Recommended: {getattr(self, 'recommended_speed', '4x')}" if free_bytes > 0 else ""
+
         if free_bytes > 0:
-            status_text = f"Disc: {media_name} ({'Blank' if is_blank else 'Appendable'}) | Free Capacity: {format_byte_size(free_bytes)}"
+            status_text = f"Disc: {media_name} ({'Blank' if is_blank else 'Appendable'}) | Free Capacity: {format_byte_size(free_bytes)}{rec_str}"
             self.lbl_disc_info.setStyleSheet("color: #28a745; font-weight: bold;")
         else:
             status_text = f"Disc: {media_name} (No Blank Media Inserted)"
@@ -1991,15 +2251,31 @@ class KryoDiskBurnerApp(QMainWindow):
                     break
             if drive_letter:
                 self.path_list.load_existing_disc_session(drive_letter)
-
-        self.update_write_speeds()
         self.update_capacity_meter()
+        self.update_filesystem_display()
 
     def update_write_speeds(self):
         media_code = getattr(self, 'current_media_info', {}).get("media_type_code", 0)
         raw_speeds = getattr(self, 'current_media_info', {}).get("supported_speeds_raw", [])
         media_name = getattr(self, 'current_media_info', {}).get("media_type_name", "")
-        
+
+        # Determine optical sweet spot recommendation
+        if media_code == 19 or "BD-RE" in media_name.upper() or "RE" in media_name.upper():
+            rec_spd = "2x"
+        elif media_code in (17, 18, 19) or "BD" in media_name.upper():
+            rec_spd = "4x"
+        elif media_code in (8, 10, 11, 13) or "DL" in media_name.upper() or "RW" in media_name.upper():
+            rec_spd = "4x"
+        elif media_code in (4, 5, 6, 7, 9) or "DVD" in media_name.upper():
+            rec_spd = "8x"
+        elif media_code == 3 or "CD-RW" in media_name.upper():
+            rec_spd = "10x"
+        elif media_code in (1, 2) or "CD" in media_name.upper():
+            rec_spd = "16x"
+        else:
+            rec_spd = "4x"
+        self.recommended_speed = rec_spd
+
         self.combo_speed.blockSignals(True)
         self.combo_speed.clear()
         self.combo_speed.addItem("Maximum (Auto)", -1)
@@ -2009,12 +2285,10 @@ class KryoDiskBurnerApp(QMainWindow):
             for s in raw_speeds:
                 if s <= 0:
                     continue
-                if media_code in (1, 2, 3):  # CD (75 sectors/sec = 1x)
+                if media_code in (1, 2, 3):
                     mult = round(s / 75.0)
-                elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13):  # DVD (680 sectors/sec = 1x)
+                elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13):
                     mult = round(s / 680.0)
-                elif media_code in (17, 18, 19):  # BD (2195 sectors/sec = 1x)
-                    mult = round(s / 2195.0)
                 else:
                     mult = round(s / 2195.0)
                 if mult >= 1:
@@ -2022,7 +2296,6 @@ class KryoDiskBurnerApp(QMainWindow):
                     if not any(item[0] == speed_label for item in speed_items):
                         speed_items.append((speed_label, s))
 
-        # Fallback speeds if disc is absent or drive doesn't report discrete speed descriptors
         if not speed_items:
             if media_code in (17, 18, 19) or "BD" in media_name.upper():
                 speed_items = [(f"{x}x", int(x * 2195)) for x in [16, 12, 10, 8, 6, 4, 2, 1]]
@@ -2033,23 +2306,18 @@ class KryoDiskBurnerApp(QMainWindow):
             else:
                 speed_items = [(f"{x}x", -1) for x in [24, 16, 12, 8, 6, 4, 2, 1]]
 
+        rec_idx = -1
         for label, sec in speed_items:
-            self.combo_speed.addItem(label, sec)
+            if label == rec_spd:
+                self.combo_speed.addItem(f"{label} (Recommended)", sec)
+                rec_idx = self.combo_speed.count() - 1
+            else:
+                self.combo_speed.addItem(label, sec)
 
-        is_bd = media_code in (17, 18, 19) or "BD" in media_name.upper()
-        if is_bd:
-            idx_4x = self.combo_speed.findText("4x")
-            if idx_4x >= 0:
-                self.combo_speed.setCurrentIndex(idx_4x)
-            else:
-                self.combo_speed.setCurrentIndex(0)
+        if rec_idx >= 0:
+            self.combo_speed.setCurrentIndex(rec_idx)
         else:
-            saved_speed = self.settings.value("write_speed", "Maximum (Auto)")
-            idx_saved = self.combo_speed.findText(saved_speed)
-            if idx_saved >= 0:
-                self.combo_speed.setCurrentIndex(idx_saved)
-            else:
-                self.combo_speed.setCurrentIndex(0)
+            self.combo_speed.setCurrentIndex(0)
 
         self.combo_speed.blockSignals(False)
 
@@ -2564,10 +2832,15 @@ class KryoDiskBurnerApp(QMainWindow):
         udf_text = self.combo_udf.currentText()
         udf_rev = "2.60" if "2.60" in udf_text else "2.50"
 
+        custom_cdbxp = self.settings.value("custom_cdbxpcmd_path", "")
+        custom_img = self.settings.value("custom_imgburn_path", "")
+
         self.worker = OpticalBurnWorker(
             drive_id, fallback_letter, targets, volume_label=vol_label,
             udf_revision=udf_rev, eject_when_done=eject_done,
-            finalize_disc=finalize_done
+            finalize_disc=finalize_done,
+            custom_cdbxpcmd_path=custom_cdbxp,
+            custom_imgburn_path=custom_img
         )
         engine_str = "cdbxpcmd" if "cdbxp" in self.combo_engine.currentText().lower() else "imgburn"
         self.worker.engine = engine_str
@@ -2662,6 +2935,62 @@ class KryoDiskBurnerApp(QMainWindow):
                 except Exception:
                     pass
 
+        self.refresh_drives()
+
+    def erase_disc_quick(self):
+        """Quick erases rewritable media in the selected optical drive (DevDebug)."""
+        drive_id = self.combo_drives.currentData()
+        if not drive_id:
+            self.show_alert("No Drive", "Please select an optical burner drive.", icon_type="warning")
+            return
+
+        drive_letter = ""
+        for d in getattr(self, 'drives', []):
+            if d.get("id") == drive_id:
+                drive_letter = d.get("letter", "")
+                break
+
+        reply = self.show_alert(
+            "Quick Erase Rewritable Disc",
+            f"Are you sure you want to Quick Erase the disc in {drive_letter or 'selected drive'}?\n\n"
+            "This will blank all existing sessions and volume structures on the disc.",
+            icon_type="question",
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default_button=QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.lbl_burn_info.setText(f"<b>Operation:</b> Quick Erase &nbsp;|&nbsp; <b>Drive:</b> {self.combo_drives.currentText()}")
+        self.lbl_burn_status.setText("Status: Erasing rewritable disc...")
+        self.lbl_burn_detail.setText("")
+        self.lbl_burn_time.setText("")
+        self.txt_burn_log.clear()
+        self.burn_progress_bar.setMaximum(0)
+        self.btn_burn_cancel.setEnabled(False)
+
+        custom_cdbxp = self.settings.value("custom_cdbxpcmd_path", "")
+        self.erase_worker = DiscEraseWorker(drive_id, drive_letter, custom_cdbxp)
+        self.erase_worker.log_message.connect(self.append_burn_log)
+        self.erase_worker.erase_finished.connect(self.handle_erase_finished)
+
+        self.stacked_widget.setCurrentIndex(1)
+        self.erase_worker.start()
+
+    def handle_erase_finished(self, success, error_msg):
+        self.btn_burn_cancel.setText("Back")
+        self.btn_burn_cancel.setEnabled(True)
+        self.burn_progress_bar.setMaximum(100)
+        self.burn_progress_bar.setValue(100 if success else 0)
+
+        if success:
+            self.lbl_burn_status.setText("Status: Quick erase completed successfully.")
+            self.append_burn_log("Quick erase completed successfully.")
+            self.show_alert("Erase Complete", "Rewritable disc was erased successfully!", icon_type="success")
+        else:
+            self.lbl_burn_status.setText("Status: Quick erase failed.")
+            self.append_burn_log(f"Quick erase error: {error_msg}")
+            self.show_alert("Erase Failed", f"Quick erase failed:\n\n{error_msg}", icon_type="error")
         self.refresh_drives()
 
     def eject_drive(self, drive_id):
