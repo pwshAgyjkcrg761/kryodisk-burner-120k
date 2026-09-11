@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.11__13.20.25
+# VERSION: 2026.09.11__15.58.50
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.11__13.20.25"
+APP_VERSION = "2026.09.11__15.58.50"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -1060,7 +1060,7 @@ class OpticalBurnWorker(QThread):
                 "/VOLUMELABEL_UDF", self.volume_label[:32],
                 "/SPEED", clean_speed,
                 "/VERIFY", "NO",                        # Suppress redundant internal sector verify
-                "/ROOTFOLDER", "YES",
+                "/ROOTFOLDER", "NO",
                 "/NOIMAGEDETAILS",
                 "/OVERWRITE", "YES",
                 "/SETTINGS", settings_ini_path,
@@ -1236,17 +1236,6 @@ class DiscEraseWorker(QThread):
                 self.log_message.emit(f"Native format note: {fe}")
 
         if wiped_sectors:
-            # Cycle / flush volume
-            try:
-                alias = f"cdaudio_{target_dest[0]}"
-                ctypes.windll.winmm.mciSendStringW(f"open {target_dest} type cdaudio alias {alias}", None, 0, None)
-                ctypes.windll.winmm.mciSendStringW(f"set {alias} door open", None, 0, None)
-                time.sleep(1.0)
-                ctypes.windll.winmm.mciSendStringW(f"set {alias} door closed", None, 0, None)
-                ctypes.windll.winmm.mciSendStringW(f"close {alias}", None, 0, None)
-            except Exception:
-                pass
-
             self.erase_finished.emit(True, "")
         else:
             self.erase_finished.emit(False, "Failed to zero volume descriptors on BD-RE media.")
@@ -1836,6 +1825,132 @@ class AddFilesFoldersDialog(QDialog):
             paths.append(self.current_dir)
         return paths
 
+class DiscExplorerDialog(QDialog):
+    """Dual-pane read-only optical disc explorer dialog to inspect files physically on media."""
+    def __init__(self, drive_path, volume_label="", parent=None):
+        super().__init__(parent)
+        self.drive_path = drive_path if drive_path.endswith(os.sep) else f"{drive_path}\\"
+        self.setWindowTitle(f"Browse Optical Disc [{self.drive_path}] - {volume_label or 'DATA_DISC'}")
+        self.resize(780, 460)
+
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+
+        layout = QVBoxLayout(self)
+
+        # 1. Top Navigation Bar
+        nav_layout = QHBoxLayout()
+        self.btn_up = QPushButton("⬆ Up")
+        self.btn_up.setFixedWidth(65)
+        self.btn_up.clicked.connect(self.navigate_up)
+        nav_layout.addWidget(self.btn_up)
+
+        self.txt_path = QLineEdit(self.drive_path)
+        self.txt_path.setReadOnly(True)
+        disc_icon = self.style().standardIcon(self.style().StandardPixmap.SP_DriveCDIcon)
+        self.txt_path.addAction(disc_icon, QLineEdit.ActionPosition.LeadingPosition)
+        nav_layout.addWidget(self.txt_path, 1)
+
+        self.btn_open_explorer = QPushButton("📁 Open in Explorer")
+        self.btn_open_explorer.clicked.connect(self.open_in_explorer)
+        nav_layout.addWidget(self.btn_open_explorer)
+        layout.addLayout(nav_layout)
+
+        # 2. Splitter: Left (Folders Tree) and Right (Contents View)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left Pane: Folders Tree
+        self.folder_model = QFileSystemModel()
+        self.folder_model.setFilter(QDir.Filter.Dirs | QDir.Filter.NoDotAndDotDot)
+        self.folder_model.setRootPath(self.drive_path)
+
+        self.tree_left = QTreeView()
+        self.tree_left.setModel(self.folder_model)
+        self.tree_left.setRootIndex(self.folder_model.index(self.drive_path))
+        self.tree_left.setHeaderHidden(False)
+        self.tree_left.header().setStretchLastSection(True)
+        for col in range(1, 4):
+            self.tree_left.hideColumn(col)
+        self.tree_left.clicked.connect(self.on_left_item_clicked)
+
+        # Right Pane: Folder Contents View
+        self.file_model = QFileSystemModel()
+        self.file_model.setFilter(QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot)
+        self.file_model.setRootPath(self.drive_path)
+
+        self.tree_right = QTreeView()
+        self.tree_right.setModel(self.file_model)
+        self.tree_right.setRootIndex(self.file_model.index(self.drive_path))
+        self.tree_right.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tree_right.setSortingEnabled(True)
+        self.tree_right.header().setSectionsClickable(True)
+        self.tree_right.header().setSortIndicatorShown(True)
+        self.tree_right.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.tree_right.doubleClicked.connect(self.on_right_item_double_clicked)
+        self.tree_right.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tree_right.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        self.tree_right.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        self.tree_right.header().setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        self.tree_right.setColumnWidth(1, 80)
+        self.tree_right.setColumnWidth(2, 90)
+        self.tree_right.setColumnWidth(3, 130)
+
+        self.splitter.addWidget(self.tree_left)
+        self.splitter.addWidget(self.tree_right)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 2)
+        self.splitter.setSizes([240, 520])
+
+        layout.addWidget(self.splitter, 1)
+
+        # 3. Bottom Action Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self.btn_close = QPushButton("Close")
+        self.btn_close.setStyleSheet("padding: 4px 18px;")
+        self.btn_close.clicked.connect(self.accept)
+        btn_layout.addWidget(self.btn_close)
+        layout.addLayout(btn_layout)
+
+        self.current_dir = self.drive_path
+        self.set_current_directory(self.drive_path)
+
+    def set_current_directory(self, dir_path):
+        clean_path = os.path.normpath(os.path.abspath(dir_path))
+        if os.path.exists(clean_path) and os.path.isdir(clean_path):
+            self.current_dir = clean_path
+            self.txt_path.setText(self.current_dir)
+            right_idx = self.file_model.setRootPath(self.current_dir)
+            self.tree_right.setRootIndex(right_idx)
+
+            left_idx = self.folder_model.index(self.current_dir)
+            if left_idx.isValid():
+                self.tree_left.setCurrentIndex(left_idx)
+                self.tree_left.scrollTo(left_idx)
+
+    def navigate_up(self):
+        if self.current_dir.rstrip('\\') != self.drive_path.rstrip('\\'):
+            parent_dir = os.path.dirname(self.current_dir)
+            if parent_dir and os.path.exists(parent_dir):
+                self.set_current_directory(parent_dir)
+
+    def on_left_item_clicked(self, index):
+        path = self.folder_model.filePath(index)
+        if path and os.path.exists(path) and os.path.isdir(path):
+            self.set_current_directory(path)
+
+    def on_right_item_double_clicked(self, index):
+        path = self.file_model.filePath(index)
+        if os.path.isdir(path):
+            self.set_current_directory(path)
+
+    def open_in_explorer(self):
+        if os.path.exists(self.current_dir):
+            os.startfile(self.current_dir)
+
+
 class KryoDiskBurnerApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1910,11 +2025,17 @@ class KryoDiskBurnerApp(QMainWindow):
         self.btn_close_tray.setFixedWidth(32)
         self.btn_close_tray.clicked.connect(self.close_tray)
 
+        self.btn_browse_disc = QPushButton("💽")
+        self.btn_browse_disc.setToolTip("Browse Contents of Disc in Drive")
+        self.btn_browse_disc.setFixedWidth(32)
+        self.btn_browse_disc.clicked.connect(self.open_disc_browser)
+
         drive_layout.addWidget(drive_label)
         drive_layout.addWidget(self.combo_drives, 1)
         drive_layout.addWidget(self.btn_refresh_drives)
         drive_layout.addWidget(self.btn_eject)
         drive_layout.addWidget(self.btn_close_tray)
+        drive_layout.addWidget(self.btn_browse_disc)
         if DEV_DEBUG:
             self.btn_erase = QPushButton("🧹")
             self.btn_erase.setToolTip("Quick Erase Rewritable Disc [DevDebug Mode]")
@@ -2175,7 +2296,6 @@ class KryoDiskBurnerApp(QMainWindow):
             self.check_finalize.blockSignals(True)
             if DEV_DEBUG:
                 self.check_finalize.setEnabled(True)
-                self.check_finalize.setChecked(self.settings.value("finalize_disc", True))
                 self.check_finalize.setToolTip("Closes and finalizes the disc. Leave unchecked to allow burning additional sessions later (multisession). [DevDebug Mode]")
             else:
                 self.check_finalize.setChecked(True)
@@ -2188,25 +2308,33 @@ class KryoDiskBurnerApp(QMainWindow):
         self.update_filesystem_display()
 
     def refresh_drives(self):
-        self.combo_drives.blockSignals(True)
-        self.combo_drives.clear()
-        
-        self.drives = get_optical_drives()
-        if not self.drives:
-            self.combo_drives.addItem("No Optical Drives Detected", None)
-            self.lbl_disc_info.setText("Disc Status: No optical drives found.")
-            self.lbl_disc_info.setStyleSheet("color: #dc3545; font-weight: bold;")
-        else:
-            for drive in self.drives:
-                self.combo_drives.addItem(drive["name"], drive["id"])
+        self.lbl_disc_info.setText("Disc Status: Scanning optical drives & media...")
+        self.lbl_disc_info.setStyleSheet("font-weight: bold; color: #007acc; padding: 2px 0px;")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+
+        try:
+            self.combo_drives.blockSignals(True)
+            self.combo_drives.clear()
             
-            saved_drive_id = self.settings.value("selected_drive_id", "")
-            idx = self.combo_drives.findData(saved_drive_id)
-            if idx >= 0:
-                self.combo_drives.setCurrentIndex(idx)
-        
-        self.combo_drives.blockSignals(False)
-        self.on_drive_selected(self.combo_drives.currentIndex())
+            self.drives = get_optical_drives()
+            if not self.drives:
+                self.combo_drives.addItem("No Optical Drives Detected", None)
+                self.lbl_disc_info.setText("Disc Status: No optical drives found.")
+                self.lbl_disc_info.setStyleSheet("color: #dc3545; font-weight: bold;")
+            else:
+                for drive in self.drives:
+                    self.combo_drives.addItem(drive["name"], drive["id"])
+                
+                saved_drive_id = self.settings.value("selected_drive_id", "")
+                idx = self.combo_drives.findData(saved_drive_id)
+                if idx >= 0:
+                    self.combo_drives.setCurrentIndex(idx)
+            
+            self.combo_drives.blockSignals(False)
+            self.on_drive_selected(self.combo_drives.currentIndex())
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def on_drive_selected(self, index):
         drive_id = self.combo_drives.currentData()
@@ -2233,24 +2361,28 @@ class KryoDiskBurnerApp(QMainWindow):
         self.update_write_speeds()
         rec_str = f" | Recommended: {getattr(self, 'recommended_speed', '4x')}" if free_bytes > 0 else ""
 
+        media_code = self.current_media_info.get("media_type_code", 0)
+        is_rewritable = media_code in (3, 5, 7, 10, 13, 16, 19) or any(x in media_name.upper() for x in ("-RE", "REWRITABLE", "-RW", "+RW", "RAM"))
+        is_rom = media_code in (1, 4, 14, 17) or "ROM" in media_name.upper()
+
         if free_bytes > 0:
             status_text = f"Disc: {media_name} ({'Blank' if is_blank else 'Appendable'}) | Free Capacity: {format_byte_size(free_bytes)}{rec_str}"
             self.lbl_disc_info.setStyleSheet("color: #28a745; font-weight: bold;")
+        elif media_code == 0 or "No Disc" in media_name:
+            status_text = f"Disc: {media_name} (No Media Inserted)"
+            self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold;")
+        elif is_rom or (not is_rewritable and not is_blank):
+            status_text = f"Disc: {media_name} (Finalized / Read-Only) | Free Capacity: 0 B"
+            self.lbl_disc_info.setStyleSheet("color: #dc3545; font-weight: bold;")
+        elif is_rewritable:
+            status_text = f"Disc: {media_name} (Rewritable Full / Erase to Reuse) | Free Capacity: 0 B"
+            self.lbl_disc_info.setStyleSheet("color: #e06c00; font-weight: bold;")
         else:
             status_text = f"Disc: {media_name} (No Blank Media Inserted)"
             self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold;")
             
         self.lbl_disc_info.setText(f"Disc Status: {status_text}")
         
-        # If disc is appendable and has existing sessions, load previous files into browser
-        if not is_blank and free_bytes > 0:
-            drive_letter = ""
-            for d in getattr(self, 'drives', []):
-                if d.get("id") == drive_id:
-                    drive_letter = d.get("letter", "")
-                    break
-            if drive_letter:
-                self.path_list.load_existing_disc_session(drive_letter)
         self.update_capacity_meter()
         self.update_filesystem_display()
 
@@ -2793,7 +2925,33 @@ class KryoDiskBurnerApp(QMainWindow):
             return
 
         total_bytes = self.path_list.get_total_bytes()
-        free_bytes = getattr(self, 'current_media_info', {}).get("free_capacity_bytes", 0)
+        media_info = getattr(self, 'current_media_info', {})
+        media_code = media_info.get("media_type_code", 0)
+        media_name = media_info.get("media_type_name", "Unknown Media")
+        is_blank = media_info.get("is_blank", False)
+        free_bytes = media_info.get("free_capacity_bytes", 0)
+
+        # Check for missing media
+        if media_code == 0 or "No Disc" in media_name:
+            self.show_alert(
+                "No Media",
+                "No recordable disc was detected in the drive.\n\nPlease insert a blank or appendable optical disc.",
+                icon_type="warning"
+            )
+            return
+
+        is_rewritable = media_code in (3, 5, 7, 10, 13, 16, 19) or any(x in media_name.upper() for x in ("-RE", "REWRITABLE", "-RW", "+RW", "RAM"))
+        is_rom = media_code in (1, 4, 14, 17) or "ROM" in media_name.upper()
+
+        # Check for finalized / read-only write-once media
+        if is_rom or (not is_rewritable and not is_blank and free_bytes == 0):
+            self.show_alert(
+                "Disc Finalized",
+                f"The inserted disc ({media_name}) has already been finalized and cannot be written to.\n\n"
+                "Please insert a blank or appendable disc.",
+                icon_type="warning"
+            )
+            return
 
         if free_bytes > 0 and total_bytes > free_bytes:
             self.show_alert(
@@ -2872,6 +3030,31 @@ class KryoDiskBurnerApp(QMainWindow):
             return which_krypt
 
         return None
+
+    def open_disc_browser(self):
+        """Opens the optical disc browser dialog to view files physically on the inserted disc."""
+        drive_id = self.combo_drives.currentData()
+        if not drive_id:
+            self.show_alert("No Drive", "Please select an optical burner drive.", icon_type="warning")
+            return
+
+        drive_letter = ""
+        for d in getattr(self, 'drives', []):
+            if d.get("id") == drive_id:
+                drive_letter = d.get("letter", "")
+                break
+
+        if not drive_letter or not os.path.exists(drive_letter):
+            self.show_alert(
+                "No Disc Accessible",
+                f"The optical disc in drive {drive_letter or 'selected'} is not accessible or contains no readable volume.",
+                icon_type="warning"
+            )
+            return
+
+        vol_label = self.txt_disc_label.text().strip() or "DATA_DISC"
+        dlg = DiscExplorerDialog(drive_letter, volume_label=vol_label, parent=self)
+        dlg.exec()
 
     def open_tray(self):
         """Opens / ejects the optical drive tray."""
@@ -3006,6 +3189,20 @@ class KryoDiskBurnerApp(QMainWindow):
             self.append_burn_log(f"Tray eject note: {e}")
         finally:
             pythoncom.CoUninitialize()
+
+        self.current_media_info = {
+            "media_type_code": 0,
+            "media_type_name": "No Disc",
+            "is_blank": False,
+            "free_capacity_bytes": 0,
+            "total_capacity_bytes": 0,
+            "supported_speeds_raw": []
+        }
+        self.lbl_disc_info.setText("Disc Status: Tray Ejected / No Disc Inserted")
+        self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold;")
+        self.update_write_speeds()
+        self.update_capacity_meter()
+        self.update_filesystem_display()
 
     def on_verify_finished(self, passed, returncode, hash_path, drive_id=None):
         """Handles the completion of KryptDist post-burn integrity verification."""
