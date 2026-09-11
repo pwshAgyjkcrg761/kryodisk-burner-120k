@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.10__16.55.50
+# VERSION: 2026.09.11__00.49.00
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.10__16.55.50"
+APP_VERSION = "2026.09.11__00.49.00"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -123,6 +123,129 @@ def format_byte_size(num_bytes):
             return f"{num_bytes:.2f} {unit}"
         num_bytes /= 1024.0
     return f"{num_bytes:.2f} PB"
+
+def locate_cdbxpcmd():
+    """Finds cdbxpcmd.exe (CDBurnerXP CLI) across PATH, Registry, internal bin, and tools directories."""
+    candidate_names = ["cdbxpcmd.exe"]
+
+    # 1. Check system PATH
+    for name in candidate_names:
+        found = shutil.which(name)
+        if found and os.path.isfile(found):
+            return os.path.normpath(found)
+
+    # 2. Check fresh Registry PATH entries
+    if sys.platform == "win32":
+        try:
+            import winreg
+            reg_paths = []
+            for hkey, subkey in [
+                (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+                (winreg.HKEY_CURRENT_USER, r"Environment")
+            ]:
+                try:
+                    with winreg.OpenKey(hkey, subkey) as k:
+                        val, _ = winreg.QueryValueEx(k, "Path")
+                        if val:
+                            reg_paths.extend(val.split(os.pathsep))
+                except Exception:
+                    pass
+
+            for p_dir in reg_paths:
+                p_dir_clean = os.path.expandvars(p_dir.strip().strip('"'))
+                if p_dir_clean and os.path.isdir(p_dir_clean):
+                    candidate = os.path.join(p_dir_clean, "cdbxpcmd.exe")
+                    if os.path.isfile(candidate):
+                        return os.path.normpath(candidate)
+        except Exception:
+            pass
+
+    # 3. Check KryoDisk internal bin directory
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    internal_candidates = [
+        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "CDBurnerXP", "cdbxpcmd.exe"),
+        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "cdbxpcmd.exe")
+    ]
+    for c in internal_candidates:
+        if os.path.isfile(c):
+            return os.path.normpath(c)
+
+    # 4. Check C:\tools and standard Program Files
+    tools_candidates = [
+        r"C:\tools\CDBurnerXP\cdbxpcmd.exe",
+        r"C:\tools\CDBurnerXPPortable\cdbxpcmd.exe",
+        r"C:\Program Files\CDBurnerXP\cdbxpcmd.exe",
+        r"C:\Program Files (x86)\CDBurnerXP\cdbxpcmd.exe"
+    ]
+    for c in tools_candidates:
+        if os.path.isfile(c):
+            return os.path.normpath(c)
+
+    return None
+
+def locate_imgburn():
+    """Finds ImgBurn / ImgBurnPortable executable across PATH, Registry, and tool directories."""
+    candidate_names = ["ImgBurnPortable.exe", "ImageBurnPortable.exe", "ImgBurn.exe"]
+
+    # 1. Check system PATH
+    for name in candidate_names:
+        found = shutil.which(name)
+        if found and os.path.isfile(found):
+            return os.path.normpath(found)
+
+    # 2. Check fresh Registry PATH entries (handles additions made before system reboot)
+    if sys.platform == "win32":
+        try:
+            import winreg
+            reg_paths = []
+            for hkey, subkey in [
+                (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+                (winreg.HKEY_CURRENT_USER, r"Environment")
+            ]:
+                try:
+                    with winreg.OpenKey(hkey, subkey) as k:
+                        val, _ = winreg.QueryValueEx(k, "Path")
+                        if val:
+                            reg_paths.extend(val.split(os.pathsep))
+                except Exception:
+                    pass
+
+            for p_dir in reg_paths:
+                p_dir_clean = os.path.expandvars(p_dir.strip().strip('"'))
+                if p_dir_clean and os.path.isdir(p_dir_clean):
+                    for name in candidate_names:
+                        candidate = os.path.join(p_dir_clean, name)
+                        if os.path.isfile(candidate):
+                            return os.path.normpath(candidate)
+        except Exception:
+            pass
+
+    # 3. Check KryoDisk internal bin directory
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    internal_candidates = [
+        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "ImageBurnPortable.exe"),
+        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "ImgBurnPortable.exe"),
+        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "App", "ImgBurn", "ImgBurn.exe"),
+        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurn", "ImgBurn.exe")
+    ]
+    for c in internal_candidates:
+        if os.path.isfile(c):
+            return os.path.normpath(c)
+
+    # 4. Check C:\tools\ImgBurnPortable locations
+    tools_candidates = [
+        r"C:\tools\ImgBurnPortable\ImgBurnPortable.exe",
+        r"C:\tools\ImgBurnPortable\ImageBurnPortable.exe",
+        r"C:\tools\ImgBurnPortable\App\ImgBurn\ImgBurn.exe",
+        r"C:\tools\ImgBurn\ImgBurn.exe",
+        r"C:\Program Files (x86)\ImgBurn\ImgBurn.exe",
+        r"C:\Program Files\ImgBurn\ImgBurn.exe"
+    ]
+    for c in tools_candidates:
+        if os.path.isfile(c):
+            return os.path.normpath(c)
+
+    return None
 
 def get_optical_drives():
     """Enumerates optical disc burner drives connected to the system via Windows IMAPI2."""
@@ -276,6 +399,8 @@ def get_drive_media_info(unique_id):
             ref_sectors = max(raw_total_sectors, raw_free_sectors)
 
             # Standard capacity mapping using both media descriptors and sector thresholds
+            is_rom = media_code in (1, 4, 14, 17) or "ROM" in base_name.upper()
+            
             if media_code in (17, 18, 19) or "BD" in base_name.upper() or ref_sectors > 5_000_000:
                 if ref_sectors <= 13_000_000:       # BD SL 25GB (23,866 MB / 23.31 GB)
                     standard_cap = 12_219_392 * sector_size
@@ -295,7 +420,12 @@ def get_drive_media_info(unique_id):
                         info["media_type_name"] = "BD-R QL 128GB (BDXL)"
 
                 info["total_capacity_bytes"] = standard_cap
-                info["free_capacity_bytes"] = standard_cap
+                if is_blank:
+                    info["free_capacity_bytes"] = standard_cap
+                elif is_rom or raw_free_sectors == 0:
+                    info["free_capacity_bytes"] = 0
+                else:
+                    info["free_capacity_bytes"] = raw_free_sectors * sector_size
 
             elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13) or "DVD" in base_name.upper() or ref_sectors > 450_000:
                 if media_code in (8, 11, 13) or ref_sectors > 2_500_000: # DVD DL (8.5GB)
@@ -304,16 +434,26 @@ def get_drive_media_info(unique_id):
                     standard_cap = 2_298_496 * sector_size
 
                 info["total_capacity_bytes"] = standard_cap
-                info["free_capacity_bytes"] = standard_cap
+                if is_blank:
+                    info["free_capacity_bytes"] = standard_cap
+                elif is_rom or raw_free_sectors == 0:
+                    info["free_capacity_bytes"] = 0
+                else:
+                    info["free_capacity_bytes"] = raw_free_sectors * sector_size
 
             elif media_code in (1, 2, 3) or "CD" in base_name.upper() or (0 < ref_sectors <= 450_000):
                 standard_cap = 360_000 * sector_size                     # CD 700MB
                 info["total_capacity_bytes"] = standard_cap
-                info["free_capacity_bytes"] = standard_cap
+                if is_blank:
+                    info["free_capacity_bytes"] = standard_cap
+                elif is_rom or raw_free_sectors == 0:
+                    info["free_capacity_bytes"] = 0
+                else:
+                    info["free_capacity_bytes"] = raw_free_sectors * sector_size
 
             else:
                 info["total_capacity_bytes"] = max(0, ref_sectors * sector_size)
-                info["free_capacity_bytes"] = info["total_capacity_bytes"]
+                info["free_capacity_bytes"] = info["total_capacity_bytes"] if is_blank else (0 if is_rom else raw_free_sectors * sector_size)
 
             # Format detailed media designation across all CD, DVD, and Blu-ray formats
             ref_cap = max(info["total_capacity_bytes"], info["free_capacity_bytes"])
@@ -477,53 +617,32 @@ import tempfile
 
 import time
 
-IMAPI_ACTION_NAMES = {
-    0: "Validating media...",
-    1: "Formatting media...",
-    2: "Initializing hardware...",
-    3: "Calibrating laser power (OPC)...",
-    4: "Writing data tracks...",
-    5: "Finalizing session & closing tracks...",
-    6: "Burn operation completed.",
-    7: "Verifying data..."
-}
-
-class DiscFormat2DataEvents:
-    """COM Event sink for IMAPI2 MsftDiscFormat2Data progress notifications."""
-    def __init__(self):
-        self.worker = None
-
-    def OnUpdate(self, sender, progress):
-        if self.worker:
-            self.worker.handle_imapi_progress(progress)
-
 class OpticalBurnWorker(QThread):
     status_update = pyqtSignal(str, str)
     progress_update = pyqtSignal(int, int, str, int, int)  # current, total, phase_msg, elapsed_sec, remaining_sec
     log_message = pyqtSignal(str)
     burn_finished = pyqtSignal(bool, str, str)
 
-    def __init__(self, drive_id, staged_paths, volume_label="DATA_DISC", eject_when_done=True,
-                 finalize_disc=True):
+    def __init__(self, drive_id, drive_letter, staged_paths, volume_label="DATA_DISC",
+                 udf_revision="2.50", eject_when_done=True, finalize_disc=True):
         super().__init__()
         self.drive_id = drive_id
+        self.drive_letter = drive_letter or ""
         self.staged_paths = staged_paths
         self.volume_label = volume_label or "DATA_DISC"
+        self.udf_revision = udf_revision or "2.50"
         self.eject_when_done = eject_when_done
         self.finalize_disc = finalize_disc
         self._is_cancelled = False
-        self._burn_start_time = 0
-        self._finalize_start_time = 0
-        self._total_payload_bytes = 0
-        self._last_logged_action = -1
-        self._speed_samples = []
-        self.data_writer = None
+        self._proc = None
+        self.speed_label = "Maximum (Auto)"
+        self.verify_after = False
 
     def cancel(self):
         self._is_cancelled = True
-        if self.data_writer:
+        if self._proc:
             try:
-                self.data_writer.CancelWrite()
+                self._proc.terminate()
             except Exception:
                 pass
 
@@ -531,225 +650,396 @@ class OpticalBurnWorker(QThread):
         t_str = time.strftime("%H:%M:%S")
         self.log_message.emit(f"[{t_str}] {text}")
 
-    def handle_imapi_progress(self, progress):
-        if self._is_cancelled:
-            return
-        try:
-            now = time.time()
-            current_action = int(getattr(progress, 'CurrentAction', 4))
-            raw_elapsed = int(getattr(progress, 'ElapsedTime', 0))
-            raw_remaining = int(getattr(progress, 'RemainingTime', 0))
-            start_lba = int(getattr(progress, 'StartLba', 0))
-            sector_count = int(getattr(progress, 'SectorCount', 0))
-            last_written = int(getattr(progress, 'LastWrittenLba', 0))
-
-            action_name = IMAPI_ACTION_NAMES.get(current_action, "Writing data tracks...")
-
-            if current_action != self._last_logged_action:
-                self._last_logged_action = current_action
-                self.log(f"Phase: {action_name}")
-                if current_action == 5:
-                    self._finalize_start_time = now
-
-            current_val = 0
-            max_val = max(1, sector_count)
-            speed_str = ""
-            calc_remaining = raw_remaining
-
-            # Calculate dynamic rolling write speed and realistic time remaining
-            if sector_count > 0 and last_written >= start_lba:
-                written_sectors = max(0, last_written - start_lba)
-                current_val = min(written_sectors, sector_count)
-                remaining_sectors = max(0, sector_count - written_sectors)
-
-                # Keep rolling sample window over last 8 seconds
-                self._speed_samples.append((now, written_sectors))
-                self._speed_samples = [s for s in self._speed_samples if now - s[0] <= 8.0]
-
-                if len(self._speed_samples) >= 2:
-                    dt = self._speed_samples[-1][0] - self._speed_samples[0][0]
-                    dsec = self._speed_samples[-1][1] - self._speed_samples[0][1]
-                    if dt > 1.0 and dsec > 0:
-                        rolling_sec_per_s = dsec / dt
-                        mb_per_s = (rolling_sec_per_s * 2048) / (1024 * 1024)
-                        speed_str = f" ({mb_per_s:.1f} MB/s)"
-
-                        if current_action == 4:  # Writing data
-                            # Payload transfer ETA + optical lead-out/finalization overhead
-                            payload_eta = int(remaining_sectors / rolling_sec_per_s)
-                            finalizing_padding = 24 if self.finalize_disc else 15
-                            calc_remaining = max(1, payload_eta + finalizing_padding)
-
-            # Accurate countdown during Lead-out and final session closure
-            if current_action == 5:  # Finalizing session
-                finalizing_dur = 25 if self.finalize_disc else 15
-                elapsed_fin = int(now - (self._finalize_start_time or now))
-                calc_remaining = max(1, finalizing_dur - elapsed_fin)
-                current_val = max_val
-            elif current_action == 6:  # Completed
-                calc_remaining = 0
-                current_val = max_val
-
-            status_text = f"Status: {action_name}{speed_str}"
-            self.status_update.emit(status_text, f"{current_val:,} / {max_val:,} sectors")
-            self.progress_update.emit(current_val, max_val, f"{action_name}{speed_str}", raw_elapsed, calc_remaining)
-
-        except Exception as e:
-            print(f"IMAPI progress callback handling notice: {e}")
-
     def run(self):
-        if not HAS_WIN32COM:
-            self.burn_finished.emit(False, "", "pywin32 (win32com) is not installed or available.")
+        target_dest = self.drive_letter.rstrip('\\')
+        selected_engine = getattr(self, 'engine', 'cdbxpcmd').lower()
+        start_time = time.time()
+
+        if "cdbxp" in selected_engine:
+            cdbxp_exe = locate_cdbxpcmd()
+            if not cdbxp_exe:
+                # Fallback to ImgBurn if CDBurnerXP not installed
+                img_alt = locate_imgburn()
+                if img_alt:
+                    self.log("cdbxpcmd.exe not found. Falling back to ImgBurn engine.")
+                    selected_engine = "imgburn"
+                else:
+                    self.burn_finished.emit(
+                        False, target_dest,
+                        "CDBurnerXP CLI (cdbxpcmd.exe) could not be found.\n\n"
+                        "Please place 'cdbxpcmd.exe' in 'C:\\tools\\CDBurnerXP\\' or in "
+                        "'KryoDisk-Burner-120K_internal\\bin\\CDBurnerXP\\', or add it to system PATH."
+                    )
+                    return
+
+        if "cdbxp" in selected_engine:
+            cdbxp_exe = locate_cdbxpcmd()
+            self.log(f"Using Burning Engine: CDBurnerXP CLI ({cdbxp_exe})")
+            self.log(f"Optical Drive: {target_dest or 'Default'}")
+            self.log(f"Volume Label: {self.volume_label} | Format: UDF")
+            self.log(f"Write Speed: {self.speed_label}")
+
+            # Query and resolve zero-based integer device index for cdbxpcmd
+            device_arg = "0"
+            if target_dest:
+                try:
+                    res = subprocess.run([cdbxp_exe, "--list-drives"], capture_output=True, text=True, timeout=5)
+                    for line in res.stdout.splitlines():
+                        if target_dest.upper() in line.upper() and "(" in line and ")" in line:
+                            idx_str = line.split("(")[1].split(")")[0].strip()
+                            if idx_str.isdigit():
+                                device_arg = idx_str
+                                break
+                except Exception:
+                    device_arg = "0"
+
+            cmd = [
+                cdbxp_exe,
+                "--burn-data",
+                f"-device:{device_arg}",
+                f"-name:{self.volume_label[:32]}",
+                "-format:udf"
+            ]
+
+            if self.finalize_disc:
+                cmd.append("-close")
+
+            if self.eject_when_done and not self.verify_after:
+                cmd.append("-eject")
+
+            # Parse speed
+            if self.speed_label and "x" in self.speed_label.lower():
+                spd_val = self.speed_label.lower().replace("x", "").strip()
+                if spd_val.isdigit():
+                    cmd.append(f"-speed:{spd_val}")
+
+            # Stage folders and loose files into CDBurnerXP arguments
+            for p in self.staged_paths:
+                clean_p = os.path.normpath(p)
+                if not os.path.exists(clean_p):
+                    continue
+                if os.path.isdir(clean_p):
+                    base_d = os.path.basename(clean_p)
+                    cmd.append(f"-folder[\\{base_d}]:{clean_p}")
+                else:
+                    cmd.append(f"-file:{clean_p}")
+
+            cmd_line_str = subprocess.list2cmdline(cmd)
+            self.status_update.emit(f"Status: Burning UDF disc via CDBurnerXP...", target_dest)
+            self.log(f"Executing: {cmd_line_str}")
+
+            try:
+                self._proc = subprocess.Popen(
+                    cmd_line_str,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    encoding='utf-8',
+                    errors='replace'
+                )
+
+                current_pct = 0
+                for line in iter(self._proc.stdout.readline, ''):
+                    if self._is_cancelled:
+                        self._proc.terminate()
+                        self.log("Burn cancelled by user.")
+                        self.burn_finished.emit(False, target_dest, "Operation cancelled by user.")
+                        return
+
+                    line_s = line.strip()
+                    if line_s:
+                        self.log(f"[cdbxp] {line_s}")
+                        
+                        # Parse numerical percentage from CDBurnerXP stream
+                        pct_match = re.search(r'(\d{1,3})\s*%', line_s)
+                        if pct_match:
+                            current_pct = max(0, min(100, int(pct_match.group(1))))
+
+                        if "Writing" in line_s or "Closing" in line_s or "Finalizing" in line_s:
+                            self.status_update.emit(f"Status: {line_s}", target_dest)
+                        elif pct_match:
+                            self.status_update.emit(f"Status: Writing tracks ({current_pct}%)", target_dest)
+
+                    elapsed = int(time.time() - start_time)
+                    
+                    # Calculate dynamic remaining time based on current percent
+                    calc_remaining = 0
+                    if current_pct > 0 and current_pct < 100:
+                        total_est = int(elapsed / (current_pct / 100.0))
+                        calc_remaining = max(1, total_est - elapsed)
+                    elif current_pct >= 100:
+                        calc_remaining = 0
+
+                    phase_msg = f"Writing data ({current_pct}%)" if current_pct < 100 else "Finalizing disc session..."
+                    self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining)
+
+                self._proc.stdout.close()
+                ret = self._proc.wait()
+
+                if ret == 0:
+                    elapsed_total = int(time.time() - start_time)
+                    mins, secs = divmod(elapsed_total, 60)
+                    self.log(f"CDBurnerXP completed successfully in {mins:02d}:{secs:02d}.")
+                    self.progress_update.emit(100, 100, "Completed", elapsed_total, 0)
+                    self.burn_finished.emit(True, target_dest, "")
+                else:
+                    self.log(f"CDBurnerXP exited with code {ret}.")
+                    self.burn_finished.emit(False, target_dest, f"CDBurnerXP exited with code {ret}.")
+
+            except Exception as e:
+                self.log(f"CDBurnerXP burn error: {e}")
+                self.burn_finished.emit(False, target_dest, str(e))
             return
 
-        pythoncom.CoInitialize()
-        temp_staging_dir = None
-        drive_letter = ""
+        # ----------------- ImgBurn Engine Route -----------------
+        imgburn_exe = locate_imgburn()
+        if not imgburn_exe:
+            self.burn_finished.emit(
+                False, self.drive_letter,
+                "ImgBurn executable could not be found.\n\n"
+                "Please place ImgBurnPortable in 'C:\\tools\\ImgBurnPortable\\' or in "
+                "'KryoDisk-Burner-120K_internal\\bin\\ImgBurnPortable\\', or add it to system PATH."
+            )
+            return
 
+        temp_dir = None
         try:
-            self.log("Initializing optical recorder...")
-            self.status_update.emit("Status: Initializing IMAPI2 optical recorder...", "")
-            
-            recorder = win32com.client.Dispatch("IMAPI2.MsftDiscRecorder2")
-            recorder.InitializeDiscRecorder(self.drive_id)
-            
-            mount_points = list(recorder.VolumePathNames)
-            drive_letter = mount_points[0] if mount_points else ""
-
-            # 1. Prepare Disc Data Writer with COM Event Sink
-            try:
-                self.data_writer = win32com.client.DispatchWithEvents("IMAPI2.MsftDiscFormat2Data", DiscFormat2DataEvents)
-                self.data_writer.worker = self
-            except Exception:
-                self.data_writer = win32com.client.Dispatch("IMAPI2.MsftDiscFormat2Data")
-
-            if not self.data_writer.IsRecorderSupported(recorder):
-                self.burn_finished.emit(False, drive_letter, "The selected recorder does not support data writing.")
+            if not target_dest:
+                self.burn_finished.emit(False, "", "No destination drive letter specified for ImgBurn.")
                 return
 
-            self.data_writer.Recorder = recorder
-            self.data_writer.ClientName = "KryoDisk Burner 120K"
-            self.data_writer.ForceMediaToBeClosed = bool(self.finalize_disc)
+            self.log(f"Using Burning Engine: {os.path.basename(imgburn_exe)} ({imgburn_exe})")
+            self.log(f"Optical Drive: {target_dest}")
+            self.log(f"Volume Label: {self.volume_label} | File System: UDF {self.udf_revision}")
+            self.log(f"Write Speed: {self.speed_label}")
 
-            self.log(f"Optical Drive: {drive_letter or 'Burner'} (ID: {self.drive_id[:36]}...)")
-            self.log(f"Volume Label: {self.volume_label} | File System: UDF 2.50")
-            if hasattr(self, 'speed_label') and self.speed_label:
-                self.log(f"Write Speed: {self.speed_label}")
-            self.log(f"Finalize Disc: {'Yes' if self.finalize_disc else 'No (Multisession Open)'}")
+            temp_dir = tempfile.mkdtemp(prefix="kryodisk_imgburn_")
+            srclist_path = os.path.join(temp_dir, "sources.txt")
+            log_path = os.path.join(temp_dir, "imgburn_session.log")
+            settings_ini_path = os.path.join(temp_dir, "imgburn_settings.ini")
 
-            # 2. Initialize File System Image targeting UDF 2.50
-            self.status_update.emit("Status: Building UDF 2.50 virtual file system...", "")
-            fsi = win32com.client.Dispatch("IMAPI2FS.MsftFileSystemImage")
-            
-            # FsiFileSystemUDF = 4
-            fsi.FileSystemsToCreate = 4
-            fsi.UDFRevision = 0x250
-            fsi.VolumeName = self.volume_label[:32]
+            with open(srclist_path, 'w', encoding='utf-8') as f:
+                for p in self.staged_paths:
+                    if os.path.exists(p):
+                        f.write(f"{p}\n")
+                        self.log(f"Staged payload: {os.path.basename(p) or p}")
 
-            # Connect multisession interfaces & import previous sessions if disc contains data
-            is_blank = False
-            try:
-                is_blank = bool(self.data_writer.MediaPhysicallyBlank or self.data_writer.MediaHeuristicallyBlank)
-            except Exception:
-                is_blank = False
+            ini_content = (
+                "[SETTINGS]\n"
+                "GENERAL_WarningsUnderburning=0\n"
+                "EVENTS_WARNINGS_Underburning=0\n"
+                "EVENTS_WARNINGS_UnderBurning=0\n"
+                "EVENTS_WARNINGS_UNDERBURNING=0\n"
+                "EVENTS_WARNINGS_Overburning=0\n"
+                "EVENTS_PROMPTS_BUILD_RootContent=0\n"
+                "EVENTS_PROMPTS_BUILD_AutoVolumeLabel=0\n"
+                "EVENTS_PROMPTS_BUILD_OverwriteMedia=0\n"
+            )
+            with open(settings_ini_path, 'w', encoding='utf-8') as f:
+                f.write(ini_content)
 
-            if not is_blank:
+            if sys.platform == "win32":
                 try:
-                    self.log("Existing multisession media detected. Importing session structure...")
-                    self.status_update.emit("Status: Importing previous disc session...", "")
-                    fsi.MultisessionInterfaces = self.data_writer.MultisessionInterfaces
-                    fsi.ImportFileSystem()
-                except Exception as ms_err:
-                    self.log(f"Multisession import note: {ms_err}")
-
-            root_item = fsi.Root
-
-            # 3. Stage directories and loose files into virtual root
-            loose_files = []
-            for path in self.staged_paths:
-                if not os.path.exists(path):
-                    continue
-                if os.path.isdir(path):
-                    dir_name = os.path.basename(path)
-                    dir_size = compute_path_size(path)
-                    self.log(f"Staging directory: {dir_name} ({format_byte_size(dir_size)})")
-                    self.status_update.emit(f"Status: Staging folder '{dir_name}'...", path)
-                    root_item.AddTree(path, True)
-                else:
-                    loose_files.append(path)
-
-            if loose_files:
-                temp_staging_dir = tempfile.mkdtemp(prefix="kryodisk_staging_")
-                for fpath in loose_files:
-                    fname = os.path.basename(fpath)
-                    fsize = os.path.getsize(fpath) if os.path.exists(fpath) else 0
-                    dst = os.path.join(temp_staging_dir, fname)
-                    self.log(f"Staging file: {fname} ({format_byte_size(fsize)})")
-                    try:
-                        os.link(fpath, dst)
-                    except Exception:
-                        shutil.copy2(fpath, dst)
-                self.status_update.emit("Status: Staging loose files into UDF 2.50 image...", "")
-                root_item.AddTree(temp_staging_dir, False)
-
-            if self._is_cancelled:
-                self.log("Burn operation cancelled by user before writing.")
-                self.burn_finished.emit(False, drive_letter, "Operation cancelled by user.")
-                return
-
-            # 4. Create ISO/UDF result image stream
-            self.log("Generating UDF 2.50 result image stream...")
-            self.status_update.emit("Status: Creating disc image stream...", "")
-            result_image = fsi.CreateResultImage()
-            image_stream = result_image.ImageStream
-
-            total_sectors = int(getattr(result_image, 'TotalBlocks', 0))
-            if total_sectors > 0:
-                total_bytes = total_sectors * 2048
-                self.log(f"Image Stream ready: {total_sectors:,} sectors ({format_byte_size(total_bytes)})")
-
-            if hasattr(self, 'requested_speed_sectors') and self.requested_speed_sectors and self.requested_speed_sectors > 0:
-                try:
-                    self.data_writer.SetWriteSpeed(int(self.requested_speed_sectors), False)
-                    self.log(f"Configured write speed limit: {self.requested_speed_sectors} sectors/sec")
-                except Exception as speed_err:
-                    self.log(f"Notice: Speed configuration note: {speed_err}")
-
-            self.log("Writing payload to optical media...")
-            self.status_update.emit("Status: Writing UDF 2.50 image to disc...", drive_letter)
-            self._burn_start_time = time.time()
-
-            # 5. Execute Write Operation
-            self.data_writer.Write(image_stream)
-
-            if not drive_letter and hasattr(self, 'fallback_drive_letter'):
-                drive_letter = self.fallback_drive_letter
-
-            total_elapsed = int(time.time() - self._burn_start_time)
-            mins, secs = divmod(total_elapsed, 60)
-            self.log(f"Burn writing completed successfully in {mins:02d}:{secs:02d}.")
-
-            # 6. Optional tray eject (only if verification is not queued)
-            if self.eject_when_done and not getattr(self, 'verify_after', False):
-                self.log("Ejecting disc tray...")
-                self.status_update.emit("Status: Ejecting disc...", drive_letter)
-                try:
-                    recorder.EjectMedia()
-                except Exception as e:
-                    self.log(f"Tray eject error: {e}")
-
-            self.burn_finished.emit(True, drive_letter, "")
-
-        except Exception as e:
-            self.log(f"Burn Error: {e}")
-            self.burn_finished.emit(False, drive_letter, str(e))
-        finally:
-            if temp_staging_dir and os.path.exists(temp_staging_dir):
-                try:
-                    shutil.rmtree(temp_staging_dir, ignore_errors=True)
+                    import winreg
+                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\ImgBurn") as k:
+                        for prompt_key in [
+                            "GENERAL_WarningsUnderburning",
+                            "EVENTS_WARNINGS_Underburning",
+                            "EVENTS_WARNINGS_UnderBurning",
+                            "EVENTS_WARNINGS_UNDERBURNING",
+                            "EVENTS_WARNINGS_Overburning",
+                            "EVENTS_PROMPTS_BUILD_RootContent",
+                            "EVENTS_PROMPTS_BUILD_AutoVolumeLabel",
+                            "EVENTS_PROMPTS_BUILD_OverwriteMedia"
+                        ]:
+                            try:
+                                winreg.SetValueEx(k, prompt_key, 0, winreg.REG_DWORD, 0)
+                            except Exception:
+                                pass
                 except Exception:
                     pass
-            pythoncom.CoUninitialize()
+
+            clean_speed = "MAX"
+            if self.speed_label and "x" in self.speed_label.lower():
+                clean_speed = self.speed_label.lower().replace(" ", "")
+            elif self.speed_label and self.speed_label.isdigit():
+                clean_speed = f"{self.speed_label}x"
+
+            eject_flag = "YES" if (self.eject_when_done and not self.verify_after) else "NO"
+
+            real_exe = imgburn_exe
+            exe_dir = os.path.dirname(imgburn_exe)
+            if os.path.basename(imgburn_exe).lower() in ("imgburnportable.exe", "imageburnportable.exe"):
+                app_exe = os.path.join(exe_dir, "App", "ImgBurn", "ImgBurn.exe")
+                if os.path.isfile(app_exe):
+                    real_exe = app_exe
+                    exe_dir = os.path.dirname(app_exe)
+
+            active_ini_file = settings_ini_path
+            root_search_dir = os.path.dirname(os.path.normpath(imgburn_exe))
+            candidate_ini_paths = [
+                os.path.join(root_search_dir, "Data", "ImgBurn.ini"),
+                os.path.join(root_search_dir, "ImgBurn.ini"),
+                os.path.join(exe_dir, "ImgBurn.ini"),
+                os.path.join(root_search_dir, "Data", "settings", "ImgBurn.ini")
+            ]
+            
+            try:
+                for root_p, _, f_list in os.walk(root_search_dir):
+                    for f_name in f_list:
+                        if f_name.lower() == "imgburn.ini":
+                            full_ini = os.path.join(root_p, f_name)
+                            if full_ini not in candidate_ini_paths:
+                                candidate_ini_paths.append(full_ini)
+            except Exception:
+                pass
+
+            for target_ini in candidate_ini_paths:
+                if os.path.isfile(target_ini):
+                    active_ini_file = target_ini
+                    try:
+                        with open(target_ini, 'r', encoding='utf-8', errors='ignore') as f:
+                            ini_data = f.read()
+                        
+                        modified = False
+                        for p_name in [
+                            "GENERAL_WarningsUnderburning",
+                            "EVENTS_WARNINGS_Underburning",
+                            "EVENTS_WARNINGS_UnderBurning",
+                            "Underburning"
+                        ]:
+                            if f"{p_name}=1" in ini_data:
+                                ini_data = ini_data.replace(f"{p_name}=1", f"{p_name}=0")
+                                modified = True
+
+                        if "GENERAL_WarningsUnderburning" not in ini_data:
+                            if "[SETTINGS]" in ini_data:
+                                ini_data = ini_data.replace("[SETTINGS]", "[SETTINGS]\nGENERAL_WarningsUnderburning=0")
+                                modified = True
+                            else:
+                                ini_data += "\n[SETTINGS]\nGENERAL_WarningsUnderburning=0\n"
+                                modified = True
+
+                        if modified:
+                            with open(target_ini, 'w', encoding='utf-8') as f:
+                                f.write(ini_data)
+                    except Exception:
+                        pass
+
+            settings_ini_path = active_ini_file
+
+            cmd = [
+                real_exe,
+                "/MODE", "BUILD",
+                "/BUILDINPUTMODE", "STANDARD",
+                "/BUILDOUTPUTMODE", "DEVICE",
+                "/SRCLIST", srclist_path,
+                "/DEST", target_dest,
+                "/FILESYSTEM", "3",                     # UDF only
+                "/UDFREVISION", str(self.udf_revision),  # "2.50" or "2.60"
+                "/VOLUMELABEL_UDF", self.volume_label[:32],
+                "/SPEED", clean_speed,
+                "/VERIFY", "NO",                        # Suppress redundant internal sector verify
+                "/ROOTFOLDER", "YES",
+                "/NOIMAGEDETAILS",
+                "/OVERWRITE", "YES",
+                "/SETTINGS", settings_ini_path,
+                "/EJECT", eject_flag,
+                "/LOG", log_path,
+                "/START",
+                "/CLOSESUCCESS"
+            ]
+
+            self.status_update.emit(f"Status: Burning UDF {self.udf_revision} disc via ImgBurn...", target_dest)
+            self.log(f"Executing ImgBurn: {' '.join(cmd)}")
+
+            startupinfo = None
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0  # SW_HIDE
+
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                startupinfo=startupinfo
+            )
+
+            def _dismiss_prompts(target_pid):
+                if sys.platform != "win32":
+                    return
+                try:
+                    user32 = ctypes.windll.user32
+                    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+                    def _enum_cb(hwnd, _):
+                        if user32.IsWindowVisible(hwnd):
+                            p_id = ctypes.c_ulong()
+                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p_id))
+                            if p_id.value == target_pid:
+                                user32.PostMessageW(hwnd, 0x0111, 6, 0)
+                                user32.PostMessageW(hwnd, 0x0111, 1, 0)
+                        return True
+
+                    user32.EnumWindows(EnumWindowsProc(_enum_cb), 0)
+                except Exception:
+                    pass
+
+            last_pos = 0
+            while self._proc.poll() is None:
+                if self._is_cancelled:
+                    self._proc.terminate()
+                    self.log("Burn cancelled by user.")
+                    self.burn_finished.emit(False, target_dest, "Operation cancelled by user.")
+                    return
+
+                if self._proc and self._proc.pid:
+                    _dismiss_prompts(self._proc.pid)
+
+                if os.path.exists(log_path):
+                    try:
+                        with open(log_path, 'r', encoding='utf-8', errors='ignore') as lf:
+                            lf.seek(last_pos)
+                            new_text = lf.read()
+                            last_pos = lf.tell()
+                            if new_text:
+                                for line in new_text.splitlines():
+                                    line_s = line.strip()
+                                    if line_s:
+                                        self.log(f"[ImgBurn] {line_s}")
+                                        if "Writing" in line_s or "Filling Buffer" in line_s:
+                                            self.status_update.emit(f"Status: {line_s}", target_dest)
+                                        elif "Synchronising Cache" in line_s or "Finalising" in line_s:
+                                            self.status_update.emit("Status: Finalizing disc session...", target_dest)
+                    except Exception:
+                        pass
+
+                elapsed = int(time.time() - start_time)
+                self.progress_update.emit(0, 100, "Burning...", elapsed, 0)
+                time.sleep(0.5)
+
+            ret = self._proc.returncode
+            if ret == 0:
+                elapsed_total = int(time.time() - start_time)
+                mins, secs = divmod(elapsed_total, 60)
+                self.log(f"ImgBurn completed successfully in {mins:02d}:{secs:02d}.")
+                self.progress_update.emit(100, 100, "Completed", elapsed_total, 0)
+                self.burn_finished.emit(True, target_dest, "")
+            else:
+                self.log(f"ImgBurn exited with error code {ret}.")
+                self.burn_finished.emit(False, target_dest, f"ImgBurn exited with error code {ret}.")
+
+        except Exception as e:
+            self.log(f"Burn process error: {e}")
+            self.burn_finished.emit(False, self.drive_letter, str(e))
+        finally:
+            if temp_dir and os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    pass
 
 
 
@@ -1455,19 +1745,31 @@ class KryoDiskBurnerApp(QMainWindow):
 
         # 3. Disc Label and File System Configuration
         opts_layout = QHBoxLayout()
+        lbl_engine = QLabel("Engine:")
+        self.combo_engine = QComboBox()
+        self.combo_engine.addItems(["CDBurnerXP (cdbxpcmd)", "ImgBurn"])
+        self.combo_engine.setToolTip("Select burning engine: CDBurnerXP (true headless CLI) or ImgBurn (supports UDF 2.60)")
+        self.combo_engine.currentIndexChanged.connect(self.on_engine_changed)
+
         lbl_label = QLabel("Volume Label:")
         self.txt_disc_label = QLineEdit("DATA_DISC")
         self.txt_disc_label.setMaxLength(32)
         self.txt_disc_label.setToolTip("Disc volume label (up to 32 characters for UDF)")
         self.txt_disc_label.textChanged.connect(self.path_list.set_volume_label)
         
-        lbl_fs = QLabel("File System: <b>UDF 2.50</b>")
-        lbl_fs.setStyleSheet("color: #007acc;")
+        lbl_fs = QLabel("File System:")
+        self.combo_udf = QComboBox()
+        self.combo_udf.addItems(["UDF 2.50", "UDF 2.60"])
+        self.combo_udf.setToolTip("Select Universal Disk Format revision (UDF 2.50 standard or UDF 2.60)")
         
+        opts_layout.addWidget(lbl_engine)
+        opts_layout.addWidget(self.combo_engine)
+        opts_layout.addSpacing(10)
         opts_layout.addWidget(lbl_label)
         opts_layout.addWidget(self.txt_disc_label)
-        opts_layout.addSpacing(15)
+        opts_layout.addSpacing(10)
         opts_layout.addWidget(lbl_fs)
+        opts_layout.addWidget(self.combo_udf)
         layout.addLayout(opts_layout)
 
         # 4. Burn Options & Verification
@@ -1620,6 +1922,14 @@ class KryoDiskBurnerApp(QMainWindow):
 
         if self.target_paths:
             self.path_list.add_paths(self.target_paths)
+
+    def on_engine_changed(self, index):
+        is_imgburn = "imgburn" in self.combo_engine.currentText().lower()
+        self.combo_udf.setEnabled(is_imgburn)
+        if not is_imgburn:
+            idx = self.combo_udf.findText("UDF 2.50")
+            if idx >= 0:
+                self.combo_udf.setCurrentIndex(idx)
 
     def refresh_drives(self):
         self.combo_drives.blockSignals(True)
@@ -1785,6 +2095,15 @@ class KryoDiskBurnerApp(QMainWindow):
                 idx_speed = self.combo_speed.findText(saved_speed)
                 if idx_speed >= 0:
                     self.combo_speed.setCurrentIndex(idx_speed)
+                saved_udf = self.settings.value("udf_revision", "UDF 2.50")
+                idx_udf = self.combo_udf.findText(saved_udf)
+                if idx_udf >= 0:
+                    self.combo_udf.setCurrentIndex(idx_udf)
+                saved_engine = self.settings.value("burn_engine", "CDBurnerXP (cdbxpcmd)")
+                idx_eng = self.combo_engine.findText(saved_engine)
+                if idx_eng >= 0:
+                    self.combo_engine.setCurrentIndex(idx_eng)
+                self.on_engine_changed(self.combo_engine.currentIndex())
             except Exception as e:
                 print(f"Error loading saved settings: {e}")
 
@@ -1821,6 +2140,8 @@ class KryoDiskBurnerApp(QMainWindow):
         self.settings.setValue("eject_disc", self.check_eject.isChecked())
         self.settings.setValue("finalize_disc", self.check_finalize.isChecked())
         self.settings.setValue("write_speed", self.combo_speed.currentText())
+        self.settings.setValue("udf_revision", self.combo_udf.currentText())
+        self.settings.setValue("burn_engine", self.combo_engine.currentText())
         if self.combo_drives.currentData():
             self.settings.setValue("selected_drive_id", self.combo_drives.currentData())
         self.settings.setValue("theme", self.current_theme)
@@ -1987,35 +2308,36 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<p>MANUAL &amp; USAGE GUIDE | Copyright (C) 2026 pwshAgyjkcrg761</p><br>"
             f"<h2>OVERVIEW</h2>"
             f"<p><b>KryoDisk Burner 120K</b> is a high-performance optical disc authoring and burning application for Windows. "
-            f"It utilizes the Windows IMAPI2 engine to build and burn compliant <b>Universal Disk Format (UDF 2.50)</b> file systems "
+            f"It uses an integrated <b>ImgBurn / ImgBurnPortable</b> engine to build and burn compliant <b>Universal Disk Format (UDF 2.50 and UDF 2.60)</b> file systems "
             f"across CD, DVD, Blu-ray (BD-R/RE), and high-capacity BDXL media (up to 128GB Quad-Layer).</p>"
             f"<h2>DISC STAGING &amp; LAYOUT</h2>"
             f"<ul>"
             f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Navigate through virtual folders and arrange files before burning.</li>"
             f"<li><b>Adding Data:</b> Use the built-in <b>➕ Add Files &amp; Folders</b> dual-explorer dialog, send items via Windows <b>SendTo</b>, or pass paths on startup. <i>(Note: Direct drag-and-drop from standard Windows Explorer is restricted by Windows UIPI when running in elevated Administrator mode.)</i></li>"
             f"<li><b>Volume Label:</b> Specify a custom disc label (up to 32 characters in accordance with UDF standards).</li>"
+            f"<li><b>File System Selector:</b> Choose between <b>UDF 2.50</b> (universal standard) and <b>UDF 2.60</b> (advanced modern Blu-ray / pseudo-overwrite).</li>"
             f"<li><b>Live Capacity Gauging:</b> Real-time capacity bar dynamically compares the staged payload against available disc media space with visual overload warnings.</li>"
             f"</ul>"
             f"<h2>HARDWARE &amp; MEDIA SUPPORT</h2>"
             f"<ul>"
             f"<li><b>Supported Formats:</b> CD-R, CD-RW, DVD-R, DVD+R, DVD-RW, DVD+RW, DVD±R DL (Dual Layer), BD-R, BD-RE, BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL).</li>"
-            f"<li><b>Write Speeds:</b> Queries drive hardware capabilities to present supported disc write speeds or automatic maximum speed configuration.</li>"
+            f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.).</li>"
             f"<li><b>Tray Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>) and motorized tray close (<code>📥</code>).</li>"
-            f"</ul>"
-            f"<h2>MULTISESSION &amp; DISC FINALIZATION</h2>"
-            f"<ul>"
-            f"<li><b>Multisession (Appendable):</b> Leave <i>Finalize Disc</i> unchecked to keep the disc open. Existing sessions on appendable media are automatically recognized and displayed.</li>"
-            f"<li><b>Disc Finalization:</b> Check <i>Finalize Disc</i> to close the session and finalize tracks for universal read compatibility across standard players and ROM drives.</li>"
             f"</ul>"
             f"<h2>POST-BURN INTEGRITY VERIFICATION</h2>"
             f"<ul>"
             f"<li><b>KryptDist Integration:</b> When <i>Verify Disc After Burn with KryptDist</i> is enabled, KryoDisk automatically detects checksum manifests (<code>.hash</code>, <code>.sha256</code>, <code>.b3</code>, etc.) on the completed disc and performs bit-level cryptographic verification.</li>"
             f"<li><b>Safe Ejection:</b> If verification is enabled, tray ejection is held until verification completes successfully.</li>"
             f"</ul>"
-            f"<h2>THEMES &amp; PREFERENCES</h2>"
+            f"<h2>IMGBURN BINARY DISCOVERY</h2>"
             f"<ul>"
-            f"<li><b>Themes:</b> Switch between <b>Dark</b>, <b>Light</b>, and <b>System</b> themes at any time via <b>Tools &gt; Themes</b>.</li>"
-            f"<li><b>Preferences:</b> Mute completion notification sounds via <b>Tools &gt; Preferences</b>.</li>"
+            f"<li>ImgBurn is automatically discovered in the following order:</li>"
+            f"  <ol>"
+            f"    <li>System and User <code>PATH</code> environment variables (including new additions prior to reboot).</li>"
+            f"    <li><code>KryoDisk-Burner-120K_internal\\bin\\ImgBurnPortable\\</code> (or <code>App\\ImgBurn\\</code>).</li>"
+            f"    <li><code>C:\\tools\\ImgBurnPortable\\</code> (or <code>App\\ImgBurn\\</code>).</li>"
+            f"    <li>Standard Program Files installations.</li>"
+            f"  </ol>"
             f"</ul>"
             f"<h2>SYSTEM REQUIREMENTS &amp; DEPENDENCIES</h2>"
             f"<ul>"
@@ -2024,11 +2346,11 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Required Python Packages:</b>"
             f"  <ul>"
             f"    <li><code>PyQt6</code> &mdash; Modern Qt6 graphical user interface framework.</li>"
-            f"    <li><code>pywin32</code> &mdash; COM client wrapper for Windows IMAPI2 (Image Mastering API v2.0).</li>"
+            f"    <li><code>pywin32</code> &mdash; COM client wrapper for hardware drive media queries.</li>"
             f"  </ul>"
             f"</li>"
             f"<li><b>Hardware:</b> Any compatible internal (SATA/ATAPI) or external (USB) optical burner drive.</li>"
-            f"<li><b>Optional Tooling:</b> <code>KryptDist.py</code> (located in the application directory, <code>C:\\scripts\\</code>, or system <code>PATH</code>) for automated post-burn cryptographic hash verification.</li>"
+            f"<li><b>External Tools:</b> <code>ImgBurnPortable</code> / <code>ImgBurn.exe</code> for burning, and optional <code>KryptDist.py</code> for post-burn cryptographic hash verification.</li>"
             f"</ul>"
         )
 
@@ -2239,14 +2561,18 @@ class KryoDiskBurnerApp(QMainWindow):
                 fallback_letter = d.get("letter", "")
                 break
 
+        udf_text = self.combo_udf.currentText()
+        udf_rev = "2.60" if "2.60" in udf_text else "2.50"
+
         self.worker = OpticalBurnWorker(
-            drive_id, targets, volume_label=vol_label, eject_when_done=eject_done,
+            drive_id, fallback_letter, targets, volume_label=vol_label,
+            udf_revision=udf_rev, eject_when_done=eject_done,
             finalize_disc=finalize_done
         )
+        engine_str = "cdbxpcmd" if "cdbxp" in self.combo_engine.currentText().lower() else "imgburn"
+        self.worker.engine = engine_str
         self.worker.speed_label = speed_label
-        self.worker.fallback_drive_letter = fallback_letter
         self.worker.verify_after = self.check_verify.isChecked()
-        self.worker.requested_speed_sectors = selected_speed_sec
         self.worker.status_update.connect(self.update_burn_status)
         self.worker.progress_update.connect(self.update_burn_progress)
         self.worker.log_message.connect(self.append_burn_log)
