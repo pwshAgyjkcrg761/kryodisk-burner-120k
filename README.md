@@ -106,7 +106,7 @@ This software is released under the **GNU General Public License v3**.
 * **PyQt6:** Required for the Graphical User Interface framework (`pip install PyQt6`).
 * **pywin32:** Required for Windows IMAPI2 COM hardware queries (`pip install pywin32`).
 * **Burning Backends:** **CDBurnerXP CLI** (`cdbxpcmd.exe`) or **ImgBurn** (`ImgBurn.exe` / `ImgBurnPortable`).
-* **Optional Tooling:** `KryptDist.py` (located in the application directory, `C:\scripts\`, `C:\tools\`, or configured in Preferences) for automated post-burn cryptographic checksum verification.
+* **Optional Tooling:** <a href="https://git.disroot.org/pwshAgyjkcrg761/KryptDist-py.git" target="_blank">`KryptDist.py`</a> (located in the application directory, `C:\scripts\`, `C:\tools\`, or configured in Preferences) for automated post-burn cryptographic checksum verification.
 
 ## Support & Maintenance
 **This repository is provided "as-is" for archival purposes.** The author is not actively looking for feedback, feature requests, or bug reports. The issue tracker is disabled.
