@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.12__01.38.42
+# VERSION: 2026.09.12__16.37.07
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.12__01.38.42"
+APP_VERSION = "2026.09.12__16.37.07"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -912,9 +912,24 @@ class OpticalBurnWorker(QThread):
 
             # Query and resolve zero-based integer device index for cdbxpcmd
             device_arg = "0"
+            startupinfo = None
+            creationflags = 0
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0  # SW_HIDE
+                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+
             if target_dest:
                 try:
-                    res = subprocess.run([cdbxp_exe, "--list-drives"], capture_output=True, text=True, timeout=5)
+                    res = subprocess.run(
+                        [cdbxp_exe, "--list-drives"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        startupinfo=startupinfo,
+                        creationflags=creationflags
+                    )
                     for line in res.stdout.splitlines():
                         if target_dest.upper() in line.upper() and "(" in line and ")" in line:
                             idx_str = line.split("(")[1].split(")")[0].strip()
@@ -967,7 +982,9 @@ class OpticalBurnWorker(QThread):
                     text=True,
                     bufsize=1,
                     encoding='utf-8',
-                    errors='replace'
+                    errors='replace',
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
                 )
 
                 current_pct = 0
@@ -1056,41 +1073,6 @@ class OpticalBurnWorker(QThread):
                         f.write(f"{p}\n")
                         self.log(f"Staged payload: {os.path.basename(p) or p}")
 
-            ini_content = (
-                "[SETTINGS]\n"
-                "GENERAL_WarningsUnderburning=0\n"
-                "EVENTS_WARNINGS_Underburning=0\n"
-                "EVENTS_WARNINGS_UnderBurning=0\n"
-                "EVENTS_WARNINGS_UNDERBURNING=0\n"
-                "EVENTS_WARNINGS_Overburning=0\n"
-                "EVENTS_PROMPTS_BUILD_RootContent=0\n"
-                "EVENTS_PROMPTS_BUILD_AutoVolumeLabel=0\n"
-                "EVENTS_PROMPTS_BUILD_OverwriteMedia=0\n"
-            )
-            with open(settings_ini_path, 'w', encoding='utf-8') as f:
-                f.write(ini_content)
-
-            if sys.platform == "win32":
-                try:
-                    import winreg
-                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\ImgBurn") as k:
-                        for prompt_key in [
-                            "GENERAL_WarningsUnderburning",
-                            "EVENTS_WARNINGS_Underburning",
-                            "EVENTS_WARNINGS_UnderBurning",
-                            "EVENTS_WARNINGS_UNDERBURNING",
-                            "EVENTS_WARNINGS_Overburning",
-                            "EVENTS_PROMPTS_BUILD_RootContent",
-                            "EVENTS_PROMPTS_BUILD_AutoVolumeLabel",
-                            "EVENTS_PROMPTS_BUILD_OverwriteMedia"
-                        ]:
-                            try:
-                                winreg.SetValueEx(k, prompt_key, 0, winreg.REG_DWORD, 0)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-
             clean_speed = "MAX"
             if self.speed_label:
                 spd_match = re.search(r'(\d+)\s*x', self.speed_label, re.IGNORECASE)
@@ -1107,60 +1089,6 @@ class OpticalBurnWorker(QThread):
                 app_exe = os.path.join(exe_dir, "App", "ImgBurn", "ImgBurn.exe")
                 if os.path.isfile(app_exe):
                     real_exe = app_exe
-                    exe_dir = os.path.dirname(app_exe)
-
-            active_ini_file = settings_ini_path
-            root_search_dir = os.path.dirname(os.path.normpath(imgburn_exe))
-            candidate_ini_paths = [
-                os.path.join(root_search_dir, "Data", "ImgBurn.ini"),
-                os.path.join(root_search_dir, "ImgBurn.ini"),
-                os.path.join(exe_dir, "ImgBurn.ini"),
-                os.path.join(root_search_dir, "Data", "settings", "ImgBurn.ini")
-            ]
-            
-            try:
-                for root_p, _, f_list in os.walk(root_search_dir):
-                    for f_name in f_list:
-                        if f_name.lower() == "imgburn.ini":
-                            full_ini = os.path.join(root_p, f_name)
-                            if full_ini not in candidate_ini_paths:
-                                candidate_ini_paths.append(full_ini)
-            except Exception:
-                pass
-
-            for target_ini in candidate_ini_paths:
-                if os.path.isfile(target_ini):
-                    active_ini_file = target_ini
-                    try:
-                        with open(target_ini, 'r', encoding='utf-8', errors='ignore') as f:
-                            ini_data = f.read()
-                        
-                        modified = False
-                        for p_name in [
-                            "GENERAL_WarningsUnderburning",
-                            "EVENTS_WARNINGS_Underburning",
-                            "EVENTS_WARNINGS_UnderBurning",
-                            "Underburning"
-                        ]:
-                            if f"{p_name}=1" in ini_data:
-                                ini_data = ini_data.replace(f"{p_name}=1", f"{p_name}=0")
-                                modified = True
-
-                        if "GENERAL_WarningsUnderburning" not in ini_data:
-                            if "[SETTINGS]" in ini_data:
-                                ini_data = ini_data.replace("[SETTINGS]", "[SETTINGS]\nGENERAL_WarningsUnderburning=0")
-                                modified = True
-                            else:
-                                ini_data += "\n[SETTINGS]\nGENERAL_WarningsUnderburning=0\n"
-                                modified = True
-
-                        if modified:
-                            with open(target_ini, 'w', encoding='utf-8') as f:
-                                f.write(ini_data)
-                    except Exception:
-                        pass
-
-            settings_ini_path = active_ini_file
 
             cmd = [
                 real_exe,
@@ -1177,7 +1105,6 @@ class OpticalBurnWorker(QThread):
                 "/ROOTFOLDER", "NO",
                 "/NOIMAGEDETAILS",
                 "/OVERWRITE", "YES",
-                "/SETTINGS", settings_ini_path,
                 "/EJECT", eject_flag,
                 "/LOG", log_path,
                 "/START",
@@ -1188,39 +1115,57 @@ class OpticalBurnWorker(QThread):
             self.log(f"Executing ImgBurn: {' '.join(cmd)}")
 
             startupinfo = None
+            creationflags = 0
             if sys.platform == "win32":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = 0  # SW_HIDE
+                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
 
             self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                startupinfo=startupinfo
+                startupinfo=startupinfo,
+                creationflags=creationflags
             )
 
-            def _dismiss_prompts(target_pid):
+            def _poll_and_hide_imgburn(target_pid):
                 if sys.platform != "win32":
-                    return
+                    return None
+                imgburn_data = {"pct": None, "title": ""}
                 try:
                     user32 = ctypes.windll.user32
                     EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
                     def _enum_cb(hwnd, _):
-                        if user32.IsWindowVisible(hwnd):
-                            p_id = ctypes.c_ulong()
-                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p_id))
-                            if p_id.value == target_pid:
-                                user32.PostMessageW(hwnd, 0x0111, 6, 0)
-                                user32.PostMessageW(hwnd, 0x0111, 1, 0)
+                        p_id = ctypes.c_ulong()
+                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p_id))
+                        if p_id.value == target_pid:
+                            if user32.IsWindowVisible(hwnd):
+                                user32.ShowWindow(hwnd, 0)  # SW_HIDE
+                                user32.PostMessageW(hwnd, 0x0111, 6, 0)  # IDYES
+                                user32.PostMessageW(hwnd, 0x0111, 1, 0)  # IDOK
+
+                            title_buf = ctypes.create_unicode_buffer(512)
+                            length = user32.GetWindowTextW(hwnd, title_buf, 512)
+                            if length > 0:
+                                t_text = title_buf.value
+                                pct_m = re.search(r'(\d{1,3})\s*%', t_text)
+                                if pct_m:
+                                    imgburn_data["pct"] = max(0, min(100, int(pct_m.group(1))))
+                                    imgburn_data["title"] = t_text
+                                elif "ImgBurn" in t_text and not imgburn_data["title"]:
+                                    imgburn_data["title"] = t_text
                         return True
 
                     user32.EnumWindows(EnumWindowsProc(_enum_cb), 0)
                 except Exception:
                     pass
+                return imgburn_data
 
             last_pos = 0
+            current_pct = 0
             while self._proc.poll() is None:
                 if self._is_cancelled:
                     self._proc.terminate()
@@ -1228,8 +1173,12 @@ class OpticalBurnWorker(QThread):
                     self.burn_finished.emit(False, target_dest, "Operation cancelled by user.")
                     return
 
+                poll_info = None
                 if self._proc and self._proc.pid:
-                    _dismiss_prompts(self._proc.pid)
+                    poll_info = _poll_and_hide_imgburn(self._proc.pid)
+
+                if poll_info and poll_info.get("pct") is not None:
+                    current_pct = poll_info["pct"]
 
                 if os.path.exists(log_path):
                     try:
@@ -1250,8 +1199,16 @@ class OpticalBurnWorker(QThread):
                         pass
 
                 elapsed = int(time.time() - start_time)
-                self.progress_update.emit(0, 100, "Burning...", elapsed, 0)
-                time.sleep(0.5)
+                calc_remaining = 0
+                if current_pct > 0 and current_pct < 100:
+                    total_est = int(elapsed / (current_pct / 100.0))
+                    calc_remaining = max(1, total_est - elapsed)
+
+                phase_title = poll_info.get("title", "") if poll_info else ""
+                clean_phase = phase_title.replace(" - ImgBurn", "").strip() if phase_title else ""
+                phase_msg = clean_phase if clean_phase else (f"Writing data ({current_pct}%)" if current_pct > 0 else "Burning...")
+                self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining)
+                time.sleep(0.4)
 
             ret = self._proc.returncode
             if ret == 0:
@@ -2212,6 +2169,7 @@ class KryoDiskBurnerApp(QMainWindow):
 
         # Disc Media Info Banner
         self.lbl_disc_info = QLabel("Disc Status: Checking...")
+        self.lbl_disc_info.setFixedHeight(22)
         self.lbl_disc_info.setStyleSheet("font-weight: bold; color: #007acc; padding: 2px 0px;")
         layout.addWidget(self.lbl_disc_info)
 
@@ -2541,19 +2499,19 @@ class KryoDiskBurnerApp(QMainWindow):
 
         if free_bytes > 0:
             status_text = f"Disc: {media_name} ({'Blank' if is_blank else 'Appendable'}) | Free Capacity: {format_byte_size(free_bytes)}{rec_str}"
-            self.lbl_disc_info.setStyleSheet("color: #28a745; font-weight: bold;")
+            self.lbl_disc_info.setStyleSheet("color: #28a745; font-weight: bold; padding: 2px 0px;")
         elif media_code == 0 or "No Disc" in media_name:
             status_text = f"Disc: {media_name} (No Media Inserted)"
-            self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold;")
+            self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold; padding: 2px 0px;")
         elif is_rom or (not is_rewritable and not is_blank):
             status_text = f"Disc: {media_name} (Finalized / Read-Only) | Free Capacity: 0 B"
-            self.lbl_disc_info.setStyleSheet("color: #dc3545; font-weight: bold;")
+            self.lbl_disc_info.setStyleSheet("color: #dc3545; font-weight: bold; padding: 2px 0px;")
         elif is_rewritable:
             status_text = f"Disc: {media_name} (Rewritable Full / Erase to Reuse) | Free Capacity: 0 B"
-            self.lbl_disc_info.setStyleSheet("color: #e06c00; font-weight: bold;")
+            self.lbl_disc_info.setStyleSheet("color: #e06c00; font-weight: bold; padding: 2px 0px;")
         else:
             status_text = f"Disc: {media_name} (No Blank Media Inserted)"
-            self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold;")
+            self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold; padding: 2px 0px;")
             
         self.lbl_disc_info.setText(f"Disc Status: {status_text}")
         
@@ -2668,10 +2626,11 @@ class KryoDiskBurnerApp(QMainWindow):
                     self.check_finalize.setChecked(self.settings.value("finalize_disc_devdebug", False))
                 else:
                     self.check_finalize.setChecked(self.settings.value("finalize_disc", False))
-                saved_speed = self.settings.value("write_speed", "Maximum (Auto)")
-                idx_speed = self.combo_speed.findText(saved_speed)
-                if idx_speed >= 0:
-                    self.combo_speed.setCurrentIndex(idx_speed)
+                saved_speed = self.settings.value("write_speed", "")
+                if saved_speed and self.combo_speed.currentIndex() <= 0:
+                    idx_speed = self.combo_speed.findText(saved_speed)
+                    if idx_speed >= 0:
+                        self.combo_speed.setCurrentIndex(idx_speed)
                 saved_udf = self.settings.value("udf_revision", "UDF 2.50")
                 idx_udf = self.combo_udf.findText(saved_udf)
                 if idx_udf >= 0:
@@ -2897,11 +2856,13 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>ImgBurn Engine:</b> Advanced authoring engine supporting customizable UDF 2.50 / UDF 2.60 file system revisions.</li>"
             f"<li><b>KryptDist Verifier (KryptDist.py):</b> Integrated cryptographic verification engine for post-burn data validation.</li>"
             f"<li><b>Preferences (Tools -&gt; Preferences):</b> Configure custom executable/script paths or click <b>Auto-Detect</b> for CDBurnerXP, ImgBurn, and KryptDist, as well as notification sound toggles.</li>"
+            f"<li><b>GUI Themes:</b> Switch between <b>Dark</b>, <b>Light</b>, or <b>System</b> theme under <b>Tools -&gt; Themes</b>.</li>"
             f"</ul>"
             f"<h2>DISC STAGING &amp; LAYOUT</h2>"
             f"<ul>"
             f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Navigate virtual folders and arrange files before burning.</li>"
             f"<li><b>Adding Data:</b> Use the <b>➕ Add Files &amp; Folders</b> dual-explorer dialog, send items via Windows <b>SendTo</b>, or pass paths on startup.</li>"
+            f"<li><b>Multisession &amp; Session Appending:</b> Leave <i>Finalize Disc</i> unchecked to permit burning additional sessions later. Existing sessions on appendable media are automatically loaded into the staging tree.</li>"
             f"<li><b>Volume Label:</b> Specify a custom disc label (up to 32 characters in accordance with UDF standards).</li>"
             f"<li><b>Capacity Gauging:</b> Real-time capacity bar dynamically compares staged payloads against free disc media space with overload warnings.</li>"
             f"</ul>"
@@ -2919,7 +2880,7 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<h2>COMMAND LINE FLAGS &amp; DEVDEBUG</h2>"
             f"<ul>"
             f"<li><code>-DevDebug</code> &mdash; Enables verbose console logging, unlocks the Quick Erase (<code>🧹</code>) tool for rewritable media, and maintains independent session finalization preferences.</li>"
-            f"<li><code>-NoDriveScan</code> (or <code>-NoScan</code>) &mdash; When used with <code>-DevDebug</code>, bypasses the initial 5-second optical drive query and media spin-up on startup for instantaneous launch.</li>"
+            f"<li><code>-NoDriveScan</code> (or <code>-NoScan</code> / <code>-SkipDriveScan</code>) &mdash; When used with <code>-DevDebug</code>, bypasses the initial 5-second optical drive query and media spin-up on startup for instantaneous launch.</li>"
             f"</ul>"
             f"<h2>ENGINE &amp; SCRIPT DISCOVERY</h2>"
             f"<ul>"
