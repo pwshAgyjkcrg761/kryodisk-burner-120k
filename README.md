@@ -105,7 +105,7 @@ This software is released under the **GNU General Public License v3**.
 * **Python:** 3.14.5+ (Recommended).
 * **PyQt6:** Required for the Graphical User Interface framework (`pip install PyQt6`).
 * **pywin32:** Required for Windows IMAPI2 COM hardware queries (`pip install pywin32`).
-* **Burning Backends:** **CDBurnerXP CLI** (`cdbxpcmd.exe`) or **ImgBurn** (`ImgBurn.exe` / `ImgBurnPortable`).
+* **Burning Backends:** **<a href="https://sourceforge.net/projects/cdburnerxp/" target="_blank">CDBurnerXP</a> CLI** (`cdbxpcmd.exe`) or **<a href="https://www.imgburn.com/" target="_blank">ImgBurn</a>** (`ImgBurn.exe` / `ImgBurnPortable`).
 * **Optional Tooling:** <a href="https://git.disroot.org/pwshAgyjkcrg761/KryptDist-py.git" target="_blank">`KryptDist.py`</a> (located in the application directory, `C:\scripts\`, `C:\tools\`, or configured in Preferences) for automated post-burn cryptographic checksum verification.
 
 ## Support & Maintenance
