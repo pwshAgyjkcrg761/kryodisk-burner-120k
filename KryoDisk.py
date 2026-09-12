@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.11__15.58.50
+# VERSION: 2026.09.11__20.22.19
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.11__15.58.50"
+APP_VERSION = "2026.09.11__20.22.19"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -1242,6 +1242,8 @@ class DiscEraseWorker(QThread):
 
 
 class KryptDistVerifyWorker(QThread):
+    status_update = pyqtSignal(str, str)
+    progress_update = pyqtSignal(int, int, str, int, int)
     finished = pyqtSignal(bool, int, str)
     log_message = pyqtSignal(str)
 
@@ -1249,11 +1251,61 @@ class KryptDistVerifyWorker(QThread):
         super().__init__()
         self.kryptdist_path = kryptdist_path
         self.hash_path = hash_path
+        self._proc = None
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+        if self._proc:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
 
     def run(self):
         try:
-            proc = subprocess.Popen([sys.executable, self.kryptdist_path, self.hash_path])
-            ret = proc.wait()
+            self._proc = subprocess.Popen(
+                [sys.executable, self.kryptdist_path, "--headless", self.hash_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            for line in iter(self._proc.stdout.readline, ''):
+                if self._is_cancelled:
+                    self._proc.terminate()
+                    self.finished.emit(False, -1, self.hash_path)
+                    return
+
+                line_s = line.strip()
+                if not line_s:
+                    continue
+
+                if line_s.startswith("VERIFY_PROGRESS:"):
+                    parts = line_s.split(":", 5)
+                    if len(parts) >= 6:
+                        try:
+                            bytes_done = int(parts[1])
+                            total_bytes = int(parts[2])
+                            elapsed_sec = int(parts[3])
+                            eta_sec = int(parts[4])
+                            curr_file = parts[5]
+
+                            pct = int((bytes_done / total_bytes) * 100) if total_bytes > 0 else 0
+                            speed_mb = (bytes_done / (1024.0 * 1024.0)) / max(1, elapsed_sec)
+                            phase = f"Verifying data ({pct}%) - {speed_mb:.1f} MB/s"
+                            self.status_update.emit(f"Status: {phase}", curr_file)
+                            self.progress_update.emit(pct, 100, phase, elapsed_sec, eta_sec)
+                        except Exception:
+                            pass
+                else:
+                    self.log_message.emit(f"[KryptDist] {line_s}")
+
+            self._proc.stdout.close()
+            ret = self._proc.wait()
             self.finished.emit(ret == 0, ret, self.hash_path)
         except Exception as e:
             self.log_message.emit(f"Verification execution error: {e}")
@@ -2909,6 +2961,19 @@ class KryoDiskBurnerApp(QMainWindow):
                 if hasattr(self, 'btn_burn_cancel'):
                     self.btn_burn_cancel.setText("Cancelling...")
                     self.btn_burn_cancel.setEnabled(False)
+        elif hasattr(self, 'verify_worker') and self.verify_worker.isRunning():
+            reply = self.show_alert(
+                "Cancel Verification",
+                "Are you sure you want to cancel disc verification?",
+                icon_type="question",
+                buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                default_button=QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.verify_worker.cancel()
+                if hasattr(self, 'btn_burn_cancel'):
+                    self.btn_burn_cancel.setText("Cancelling...")
+                    self.btn_burn_cancel.setEnabled(False)
         else:
             self.stacked_widget.setCurrentIndex(0)
             self.refresh_drives()
@@ -3207,7 +3272,11 @@ class KryoDiskBurnerApp(QMainWindow):
     def on_verify_finished(self, passed, returncode, hash_path, drive_id=None):
         """Handles the completion of KryptDist post-burn integrity verification."""
         hash_name = os.path.basename(hash_path) if hash_path else "checksum file"
+        self.btn_burn_cancel.setText("Back")
+        self.btn_burn_cancel.setEnabled(True)
+        self.lbl_burn_detail.setText("")
         if passed:
+            self.burn_progress_bar.setValue(100)
             self.lbl_burn_status.setText("Status: Verification Succeeded (100% Match)")
             self.append_burn_log(f"[OK] Verification Passed: All files match checksums in '{hash_name}'.")
             
@@ -3215,6 +3284,7 @@ class KryoDiskBurnerApp(QMainWindow):
                 self.append_burn_log("Ejecting disc tray...")
                 self.eject_drive(drive_id)
         else:
+            self.burn_progress_bar.setValue(0)
             self.lbl_burn_status.setText("Status: Verification Failed (Mismatch or Read Error)")
             self.append_burn_log(f"[ERROR] Verification Failed (Exit code {returncode}): Checksum mismatch or corruption detected in '{hash_name}'!")
             self.show_alert(
@@ -3279,8 +3349,14 @@ class KryoDiskBurnerApp(QMainWindow):
             if first_hash_file:
                 self.append_burn_log(f"Launching KryptDist verification on: {os.path.basename(first_hash_file)}")
                 self.lbl_burn_status.setText("Status: Verifying disc integrity with KryptDist...")
+                self.burn_progress_bar.setValue(0)
+                self.lbl_burn_time.setText("Elapsed: 00:00  |  Remaining: --:--")
+                self.btn_burn_cancel.setText("Cancel Verify")
+                self.btn_burn_cancel.setEnabled(True)
                 self.verify_worker = KryptDistVerifyWorker(kryptdist_path, first_hash_file)
                 self.verify_worker.log_message.connect(self.append_burn_log)
+                self.verify_worker.status_update.connect(self.update_burn_status)
+                self.verify_worker.progress_update.connect(self.update_burn_progress)
                 self.verify_worker.finished.connect(
                     lambda passed, ret, hf: self.on_verify_finished(passed, ret, hf, drive_id)
                 )
