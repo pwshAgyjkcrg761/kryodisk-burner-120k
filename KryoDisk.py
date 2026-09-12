@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.11__20.22.19
+# VERSION: 2026.09.12__01.38.42
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,9 +70,15 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.11__20.22.19"
+APP_VERSION = "2026.09.12__01.38.42"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
+
+NO_DRIVE_SCAN = DEV_DEBUG and any(arg.lower() in (
+    "-nodrivescan", "--nodrivescan", "/nodrivescan",
+    "-noscan", "--noscan", "/noscan",
+    "-skipdrivescan", "--skipdrivescan", "/skipdrivescan"
+) for arg in sys.argv)
 
 def natural_sort_key(s):
     """Sort strings containing numbers in human/natural order safely across types."""
@@ -248,6 +254,69 @@ def locate_imgburn(custom_path=None):
         r"C:\Program Files\ImgBurn\ImgBurn.exe"
     ]
     for c in tools_candidates:
+        if os.path.isfile(c):
+            return os.path.normpath(c)
+
+    return None
+
+def locate_kryptdist(custom_path=None):
+    """Finds KryptDist.py script across custom path, script dir, PATH, Registry, and standard tool locations."""
+    if custom_path and os.path.isfile(custom_path):
+        return os.path.normpath(custom_path)
+
+    # 1. Check same directory as script
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    c_local = os.path.join(script_dir, "KryptDist.py")
+    if os.path.isfile(c_local):
+        return os.path.normpath(c_local)
+
+    # 2. Check system PATH
+    found = shutil.which("KryptDist.py")
+    if found and os.path.isfile(found):
+        return os.path.normpath(found)
+
+    # 3. Check fresh Registry PATH entries (handles additions made before reboot)
+    if sys.platform == "win32":
+        try:
+            import winreg
+            reg_paths = []
+            for hkey, subkey in [
+                (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+                (winreg.HKEY_CURRENT_USER, r"Environment")
+            ]:
+                try:
+                    with winreg.OpenKey(hkey, subkey) as k:
+                        val, _ = winreg.QueryValueEx(k, "Path")
+                        if val:
+                            reg_paths.extend(val.split(os.pathsep))
+                except Exception:
+                    pass
+
+            for p_dir in reg_paths:
+                p_dir_clean = os.path.expandvars(p_dir.strip().strip('"'))
+                if p_dir_clean and os.path.isdir(p_dir_clean):
+                    candidate = os.path.join(p_dir_clean, "KryptDist.py")
+                    if os.path.isfile(candidate):
+                        return os.path.normpath(candidate)
+        except Exception:
+            pass
+
+    # 4. Check KryoDisk internal bin directory
+    internal_candidates = [
+        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "KryptDist", "KryptDist.py"),
+        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "KryptDist.py")
+    ]
+    for c in internal_candidates:
+        if os.path.isfile(c):
+            return os.path.normpath(c)
+
+    # 5. Check standard C:\scripts and C:\tools locations
+    standard_candidates = [
+        r"C:\scripts\KryptDist.py",
+        r"C:\tools\KryptDist\KryptDist.py",
+        r"C:\tools\KryptDist.py"
+    ]
+    for c in standard_candidates:
         if os.path.isfile(c):
             return os.path.normpath(c)
 
@@ -591,7 +660,7 @@ class PreferencesDialog(QDialog):
         super().__init__(parent)
         self.parent_app = parent
         self.setWindowTitle("Preferences")
-        self.resize(580, 270)
+        self.resize(580, 330)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
         icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
@@ -647,6 +716,23 @@ class PreferencesDialog(QDialog):
         imgburn_row.addWidget(self.btn_detect_imgburn)
         eng_layout.addLayout(imgburn_row)
 
+        eng_layout.addSpacing(10)
+
+        # KryptDist Verification Engine
+        lbl_kryptdist = QLabel("<b>KryptDist Verifier (KryptDist.py):</b>")
+        eng_layout.addWidget(lbl_kryptdist)
+        kryptdist_row = QHBoxLayout()
+        self.txt_kryptdist_path = QLineEdit()
+        self.txt_kryptdist_path.setPlaceholderText("Auto-detect (System PATH, C:\\scripts, Internal bin, C:\\tools)")
+        self.btn_browse_kryptdist = QPushButton("Browse...")
+        self.btn_browse_kryptdist.clicked.connect(self.browse_kryptdist)
+        self.btn_detect_kryptdist = QPushButton("Auto-Detect")
+        self.btn_detect_kryptdist.clicked.connect(self.auto_detect_kryptdist)
+        kryptdist_row.addWidget(self.txt_kryptdist_path, 1)
+        kryptdist_row.addWidget(self.btn_browse_kryptdist)
+        kryptdist_row.addWidget(self.btn_detect_kryptdist)
+        eng_layout.addLayout(kryptdist_row)
+
         eng_layout.addStretch()
         self.tabs.addTab(tab_engines, "Engines")
 
@@ -677,6 +763,15 @@ class PreferencesDialog(QDialog):
         if path:
             self.txt_imgburn_path.setText(os.path.normpath(path))
 
+    def browse_kryptdist(self):
+        curr = self.txt_kryptdist_path.text().strip() or os.getcwd()
+        start_dir = os.path.dirname(curr) if os.path.isfile(curr) else (curr if os.path.isdir(curr) else os.getcwd())
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select KryptDist Script (KryptDist.py)", start_dir, "Python Script (KryptDist.py *.py);;All Files (*.*)"
+        )
+        if path:
+            self.txt_kryptdist_path.setText(os.path.normpath(path))
+
     def auto_detect_cdbxp(self):
         detected = locate_cdbxpcmd()
         if detected:
@@ -692,6 +787,14 @@ class PreferencesDialog(QDialog):
         else:
             self.txt_imgburn_path.clear()
             self.txt_imgburn_path.setPlaceholderText("Not found (Auto-detect failed)")
+
+    def auto_detect_kryptdist(self):
+        detected = locate_kryptdist()
+        if detected:
+            self.txt_kryptdist_path.setText(detected)
+        else:
+            self.txt_kryptdist_path.clear()
+            self.txt_kryptdist_path.setPlaceholderText("Not found (Auto-detect failed)")
 
     def load_values(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
@@ -714,6 +817,14 @@ class PreferencesDialog(QDialog):
                 if detected:
                     self.txt_imgburn_path.setText(detected)
 
+            saved_krypt = s.value("custom_kryptdist_path", "")
+            if saved_krypt and os.path.isfile(saved_krypt):
+                self.txt_kryptdist_path.setText(os.path.normpath(saved_krypt))
+            else:
+                detected = locate_kryptdist()
+                if detected:
+                    self.txt_kryptdist_path.setText(detected)
+
     def save_and_close(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
@@ -724,6 +835,9 @@ class PreferencesDialog(QDialog):
 
             imgburn_val = self.txt_imgburn_path.text().strip()
             s.setValue("custom_imgburn_path", imgburn_val if os.path.isfile(imgburn_val) else "")
+
+            krypt_val = self.txt_kryptdist_path.text().strip()
+            s.setValue("custom_kryptdist_path", krypt_val if os.path.isfile(krypt_val) else "")
         self.accept()
 
 
@@ -2304,7 +2418,14 @@ class KryoDiskBurnerApp(QMainWindow):
         self.setCentralWidget(self.stacked_widget)
 
         # Populate drives on initial load
-        self.refresh_drives()
+        if not NO_DRIVE_SCAN:
+            self.refresh_drives()
+        else:
+            self.combo_drives.blockSignals(True)
+            self.combo_drives.addItem("Drive query skipped (Click 🔄 to scan)", None)
+            self.combo_drives.blockSignals(False)
+            self.lbl_disc_info.setText("Disc Status: Drive query skipped (-NoDriveScan). Click 🔄 to scan optical hardware.")
+            self.lbl_disc_info.setStyleSheet("color: #888888; font-weight: bold; padding: 2px 0px;")
 
         if self.target_paths:
             self.path_list.add_paths(self.target_paths)
@@ -2348,6 +2469,7 @@ class KryoDiskBurnerApp(QMainWindow):
             self.check_finalize.blockSignals(True)
             if DEV_DEBUG:
                 self.check_finalize.setEnabled(True)
+                self.check_finalize.setChecked(self.settings.value("finalize_disc_devdebug", False))
                 self.check_finalize.setToolTip("Closes and finalizes the disc. Leave unchecked to allow burning additional sessions later (multisession). [DevDebug Mode]")
             else:
                 self.check_finalize.setChecked(True)
@@ -2542,7 +2664,10 @@ class KryoDiskBurnerApp(QMainWindow):
                 self.txt_disc_label.setText(self.settings.value("disc_label", "DATA_DISC"))
                 self.check_verify.setChecked(self.settings.value("verify_disc", True))
                 self.check_eject.setChecked(self.settings.value("eject_disc", True))
-                self.check_finalize.setChecked(self.settings.value("finalize_disc", False))
+                if DEV_DEBUG:
+                    self.check_finalize.setChecked(self.settings.value("finalize_disc_devdebug", False))
+                else:
+                    self.check_finalize.setChecked(self.settings.value("finalize_disc", False))
                 saved_speed = self.settings.value("write_speed", "Maximum (Auto)")
                 idx_speed = self.combo_speed.findText(saved_speed)
                 if idx_speed >= 0:
@@ -2590,7 +2715,10 @@ class KryoDiskBurnerApp(QMainWindow):
         self.settings.setValue("disc_label", self.txt_disc_label.text().strip())
         self.settings.setValue("verify_disc", self.check_verify.isChecked())
         self.settings.setValue("eject_disc", self.check_eject.isChecked())
-        self.settings.setValue("finalize_disc", self.check_finalize.isChecked())
+        if DEV_DEBUG:
+            self.settings.setValue("finalize_disc_devdebug", self.check_finalize.isChecked())
+        else:
+            self.settings.setValue("finalize_disc", self.check_finalize.isChecked())
         self.settings.setValue("write_speed", self.combo_speed.currentText())
         self.settings.setValue("udf_revision", self.combo_udf.currentText())
         self.settings.setValue("burn_engine", self.combo_engine.currentText())
@@ -2728,7 +2856,7 @@ class KryoDiskBurnerApp(QMainWindow):
     def show_manual(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Manual")
-        dialog.resize(650, 540)
+        dialog.resize(680, 560)
 
         script_dir = os.path.dirname(os.path.realpath(__file__))
         icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
@@ -2760,49 +2888,55 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<p>MANUAL &amp; USAGE GUIDE | Copyright (C) 2026 pwshAgyjkcrg761</p><br>"
             f"<h2>OVERVIEW</h2>"
             f"<p><b>KryoDisk Burner 120K</b> is a high-performance optical disc authoring and burning application for Windows. "
-            f"It uses an integrated <b>ImgBurn / ImgBurnPortable</b> engine to build and burn compliant <b>Universal Disk Format (UDF 2.50 and UDF 2.60)</b> file systems "
+            f"It features dual burning engine support utilizing <b>CDBurnerXP CLI (cdbxpcmd.exe)</b> for headless operation and "
+            f"<b>ImgBurn / ImgBurnPortable</b> to author compliant <b>Universal Disk Format (UDF 2.50 / UDF 2.60)</b> file systems "
             f"across CD, DVD, Blu-ray (BD-R/RE), and high-capacity BDXL media (up to 128GB Quad-Layer).</p>"
+            f"<h2>BURNING ENGINES &amp; PREFERENCES</h2>"
+            f"<ul>"
+            f"<li><b>CDBurnerXP CLI (Default):</b> Headless CLI burning engine that formats and burns data discs with live track progress.</li>"
+            f"<li><b>ImgBurn Engine:</b> Advanced authoring engine supporting customizable UDF 2.50 / UDF 2.60 file system revisions.</li>"
+            f"<li><b>KryptDist Verifier (KryptDist.py):</b> Integrated cryptographic verification engine for post-burn data validation.</li>"
+            f"<li><b>Preferences (Tools -&gt; Preferences):</b> Configure custom executable/script paths or click <b>Auto-Detect</b> for CDBurnerXP, ImgBurn, and KryptDist, as well as notification sound toggles.</li>"
+            f"</ul>"
             f"<h2>DISC STAGING &amp; LAYOUT</h2>"
             f"<ul>"
-            f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Navigate through virtual folders and arrange files before burning.</li>"
-            f"<li><b>Adding Data:</b> Use the built-in <b>➕ Add Files &amp; Folders</b> dual-explorer dialog, send items via Windows <b>SendTo</b>, or pass paths on startup. <i>(Note: Direct drag-and-drop from standard Windows Explorer is restricted by Windows UIPI when running in elevated Administrator mode.)</i></li>"
+            f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Navigate virtual folders and arrange files before burning.</li>"
+            f"<li><b>Adding Data:</b> Use the <b>➕ Add Files &amp; Folders</b> dual-explorer dialog, send items via Windows <b>SendTo</b>, or pass paths on startup.</li>"
             f"<li><b>Volume Label:</b> Specify a custom disc label (up to 32 characters in accordance with UDF standards).</li>"
-            f"<li><b>File System Selector:</b> Choose between <b>UDF 2.50</b> (universal standard) and <b>UDF 2.60</b> (advanced modern Blu-ray / pseudo-overwrite).</li>"
-            f"<li><b>Live Capacity Gauging:</b> Real-time capacity bar dynamically compares the staged payload against available disc media space with visual overload warnings.</li>"
+            f"<li><b>Capacity Gauging:</b> Real-time capacity bar dynamically compares staged payloads against free disc media space with overload warnings.</li>"
             f"</ul>"
             f"<h2>HARDWARE &amp; MEDIA SUPPORT</h2>"
             f"<ul>"
-            f"<li><b>Supported Formats:</b> CD-R, CD-RW, DVD-R, DVD+R, DVD-RW, DVD+RW, DVD±R DL (Dual Layer), BD-R, BD-RE, BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL).</li>"
-            f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.).</li>"
-            f"<li><b>Tray Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>) and motorized tray close (<code>📥</code>).</li>"
+            f"<li><b>Supported Formats:</b> CD-R/RW, DVD±R/RW, DVD±R DL (Dual Layer), BD-R/RE (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL).</li>"
+            f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.) with automatic media recommendations.</li>"
+            f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
             f"</ul>"
             f"<h2>POST-BURN INTEGRITY VERIFICATION</h2>"
             f"<ul>"
-            f"<li><b>KryptDist Integration:</b> When <i>Verify Disc After Burn with KryptDist</i> is enabled, KryoDisk automatically detects checksum manifests (<code>.hash</code>, <code>.sha256</code>, <code>.b3</code>, etc.) on the completed disc and performs bit-level cryptographic verification.</li>"
+            f"<li><b>Automated Verification:</b> When <i>Verify Disc After Burn with KryptDist</i> is checked, KryoDisk scans the burned disc for checksum manifests (<code>.hash</code>, <code>.b3</code>, <code>.sha256</code>, <code>.sha512</code>, <code>.xxh3</code>, <code>.md5</code>, <code>.sfv</code>, etc.) and performs 100% cryptographic validation.</li>"
             f"<li><b>Safe Ejection:</b> If verification is enabled, tray ejection is held until verification completes successfully.</li>"
             f"</ul>"
-            f"<h2>IMGBURN BINARY DISCOVERY</h2>"
+            f"<h2>COMMAND LINE FLAGS &amp; DEVDEBUG</h2>"
             f"<ul>"
-            f"<li>ImgBurn is automatically discovered in the following order:</li>"
+            f"<li><code>-DevDebug</code> &mdash; Enables verbose console logging, unlocks the Quick Erase (<code>🧹</code>) tool for rewritable media, and maintains independent session finalization preferences.</li>"
+            f"<li><code>-NoDriveScan</code> (or <code>-NoScan</code>) &mdash; When used with <code>-DevDebug</code>, bypasses the initial 5-second optical drive query and media spin-up on startup for instantaneous launch.</li>"
+            f"</ul>"
+            f"<h2>ENGINE &amp; SCRIPT DISCOVERY</h2>"
+            f"<ul>"
+            f"<li>Engines and scripts are automatically discovered across:</li>"
             f"  <ol>"
-            f"    <li>System and User <code>PATH</code> environment variables (including new additions prior to reboot).</li>"
-            f"    <li><code>KryoDisk-Burner-120K_internal\\bin\\ImgBurnPortable\\</code> (or <code>App\\ImgBurn\\</code>).</li>"
-            f"    <li><code>C:\\tools\\ImgBurnPortable\\</code> (or <code>App\\ImgBurn\\</code>).</li>"
-            f"    <li>Standard Program Files installations.</li>"
+            f"    <li>User and System <code>PATH</code> environment variables (including fresh registry additions).</li>"
+            f"    <li><code>KryoDisk-Burner-120K_internal\\bin\\</code> directories.</li>"
+            f"    <li><code>C:\\tools\\</code> and <code>C:\\scripts\\</code> standard tool directories.</li>"
+            f"    <li>Custom configured paths in <b>Tools -&gt; Preferences -&gt; Engines</b>.</li>"
             f"  </ol>"
             f"</ul>"
             f"<h2>SYSTEM REQUIREMENTS &amp; DEPENDENCIES</h2>"
             f"<ul>"
             f"<li><b>Operating System:</b> Windows 10, Windows 11, or Windows Server (64-bit).</li>"
             f"<li><b>Python Runtime:</b> Python 3.14.5 or higher.</li>"
-            f"<li><b>Required Python Packages:</b>"
-            f"  <ul>"
-            f"    <li><code>PyQt6</code> &mdash; Modern Qt6 graphical user interface framework.</li>"
-            f"    <li><code>pywin32</code> &mdash; COM client wrapper for hardware drive media queries.</li>"
-            f"  </ul>"
-            f"</li>"
+            f"<li><b>Required Python Packages:</b> <code>PyQt6</code> (GUI framework) and <code>pywin32</code> (optical COM interface).</li>"
             f"<li><b>Hardware:</b> Any compatible internal (SATA/ATAPI) or external (USB) optical burner drive.</li>"
-            f"<li><b>External Tools:</b> <code>ImgBurnPortable</code> / <code>ImgBurn.exe</code> for burning, and optional <code>KryptDist.py</code> for post-burn cryptographic hash verification.</li>"
             f"</ul>"
         )
 
@@ -3078,23 +3212,9 @@ class KryoDiskBurnerApp(QMainWindow):
         self.worker.start()
 
     def locate_kryptdist(self):
-        """Finds the path to KryptDist.py via PATH, local script dir, or default location."""
-        # 1. Check same directory
-        local_krypt = os.path.join(os.path.dirname(os.path.realpath(__file__)), "KryptDist.py")
-        if os.path.exists(local_krypt):
-            return local_krypt
-
-        # 2. Check C:\scripts\KryptDist.py
-        default_krypt = r"C:\scripts\KryptDist.py"
-        if os.path.exists(default_krypt):
-            return default_krypt
-
-        # 3. Check PATH
-        which_krypt = shutil.which("KryptDist.py")
-        if which_krypt:
-            return which_krypt
-
-        return None
+        """Finds the path to KryptDist using preferences custom path and standard locations."""
+        custom_krypt = self.settings.value("custom_kryptdist_path", "") if hasattr(self, 'settings') else ""
+        return locate_kryptdist(custom_krypt)
 
     def open_disc_browser(self):
         """Opens the optical disc browser dialog to view files physically on the inserted disc."""
@@ -3283,6 +3403,13 @@ class KryoDiskBurnerApp(QMainWindow):
             if self.check_eject.isChecked() and drive_id:
                 self.append_burn_log("Ejecting disc tray...")
                 self.eject_drive(drive_id)
+
+            self.show_alert(
+                "Burn & Verification Complete",
+                f"Disc burn and integrity verification completed successfully!\n\n"
+                f"All files verified 100% against '{hash_name}'.",
+                icon_type="success"
+            )
         else:
             self.burn_progress_bar.setValue(0)
             self.lbl_burn_status.setText("Status: Verification Failed (Mismatch or Read Error)")
