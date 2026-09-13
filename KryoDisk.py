@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.12__16.37.07
+# VERSION: 2026.09.13__09.03.09
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.12__16.37.07"
+APP_VERSION = "2026.09.13__09.03.09"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -584,7 +584,7 @@ def get_drive_media_info(unique_id):
         pythoncom.CoUninitialize()
     return info
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDir
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDir, QTimer
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QPushButton, QFileDialog, QLabel, QMessageBox, 
                              QDialog, QCheckBox, QTextBrowser, QDialogButtonBox,
@@ -1908,9 +1908,28 @@ class AddFilesFoldersDialog(QDialog):
             # Sync left tree view selection and expansion
             left_idx = self.folder_model.index(self.current_dir)
             if left_idx.isValid():
+                parent = left_idx.parent()
+                while parent.isValid():
+                    self.tree_left.expand(parent)
+                    parent = parent.parent()
                 self.tree_left.setCurrentIndex(left_idx)
-                self.tree_left.scrollTo(left_idx)
                 self.tree_left.expand(left_idx)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(150, self._initial_scroll_to_selected)
+
+    def _initial_scroll_to_selected(self):
+        if hasattr(self, 'current_dir') and os.path.exists(self.current_dir):
+            left_idx = self.folder_model.index(self.current_dir)
+            if left_idx.isValid():
+                parent = left_idx.parent()
+                while parent.isValid():
+                    self.tree_left.expand(parent)
+                    parent = parent.parent()
+                self.tree_left.setCurrentIndex(left_idx)
+                self.tree_left.expand(left_idx)
+                self.tree_left.scrollTo(left_idx, QAbstractItemView.ScrollHint.PositionAtCenter)
 
     def navigate_up(self):
         parent_dir = os.path.dirname(self.current_dir)
