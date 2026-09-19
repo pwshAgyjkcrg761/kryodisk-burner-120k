@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.13__09.03.09
+# VERSION: 2026.09.19__08.21.23
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.13__09.03.09"
+APP_VERSION = "2026.09.19__08.21.23"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -170,10 +170,12 @@ def locate_cdbxpcmd(custom_path=None):
             pass
 
     # 3. Check KryoDisk internal bin directory
-    script_dir = os.path.dirname(os.path.realpath(__file__))
+    app_dir = get_app_dir()
     internal_candidates = [
-        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "CDBurnerXP", "cdbxpcmd.exe"),
-        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "cdbxpcmd.exe")
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "CDBurnerXP", "cdbxpcmd.exe"),
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "cdbxpcmd.exe"),
+        get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "bin", "CDBurnerXP", "cdbxpcmd.exe")),
+        get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "bin", "cdbxpcmd.exe"))
     ]
     for c in internal_candidates:
         if os.path.isfile(c):
@@ -233,12 +235,16 @@ def locate_imgburn(custom_path=None):
             pass
 
     # 3. Check KryoDisk internal bin directory
-    script_dir = os.path.dirname(os.path.realpath(__file__))
+    app_dir = get_app_dir()
     internal_candidates = [
-        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "ImageBurnPortable.exe"),
-        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "ImgBurnPortable.exe"),
-        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "App", "ImgBurn", "ImgBurn.exe"),
-        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurn", "ImgBurn.exe")
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "ImageBurnPortable.exe"),
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "ImgBurnPortable.exe"),
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "App", "ImgBurn", "ImgBurn.exe"),
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "ImgBurn", "ImgBurn.exe"),
+        get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "ImageBurnPortable.exe")),
+        get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "ImgBurnPortable.exe")),
+        get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "bin", "ImgBurnPortable", "App", "ImgBurn", "ImgBurn.exe")),
+        get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "bin", "ImgBurn", "ImgBurn.exe"))
     ]
     for c in internal_candidates:
         if os.path.isfile(c):
@@ -259,21 +265,41 @@ def locate_imgburn(custom_path=None):
 
     return None
 
+def get_app_dir():
+    """Returns directory of running executable or script for persistent configs and external files."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.realpath(__file__))
+
+def get_resource_path(relative_path):
+    """Returns absolute path to resource, resolving PyInstaller _MEIPASS bundle and app directories."""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        bundle_path = os.path.join(sys._MEIPASS, relative_path)
+        if os.path.exists(bundle_path):
+            return os.path.normpath(bundle_path)
+    return os.path.normpath(os.path.join(get_app_dir(), relative_path))
+
 def locate_kryptdist(custom_path=None):
-    """Finds KryptDist.py script across custom path, script dir, PATH, Registry, and standard tool locations."""
+    """Finds KryptDist (KryptDist.exe or KryptDist.py) across custom path, app dir, PATH, Registry, and tool locations."""
     if custom_path and os.path.isfile(custom_path):
         return os.path.normpath(custom_path)
 
-    # 1. Check same directory as script
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    c_local = os.path.join(script_dir, "KryptDist.py")
-    if os.path.isfile(c_local):
-        return os.path.normpath(c_local)
+    candidate_names = ["KryptDist.exe", "KryptDist.py"]
+
+    # 1. Check app directory and bundled directory
+    for root_dir in [get_app_dir(), getattr(sys, '_MEIPASS', '')]:
+        if not root_dir:
+            continue
+        for name in candidate_names:
+            c_local = os.path.join(root_dir, name)
+            if os.path.isfile(c_local):
+                return os.path.normpath(c_local)
 
     # 2. Check system PATH
-    found = shutil.which("KryptDist.py")
-    if found and os.path.isfile(found):
-        return os.path.normpath(found)
+    for name in candidate_names:
+        found = shutil.which(name)
+        if found and os.path.isfile(found):
+            return os.path.normpath(found)
 
     # 3. Check fresh Registry PATH entries (handles additions made before reboot)
     if sys.platform == "win32":
@@ -295,16 +321,22 @@ def locate_kryptdist(custom_path=None):
             for p_dir in reg_paths:
                 p_dir_clean = os.path.expandvars(p_dir.strip().strip('"'))
                 if p_dir_clean and os.path.isdir(p_dir_clean):
-                    candidate = os.path.join(p_dir_clean, "KryptDist.py")
-                    if os.path.isfile(candidate):
-                        return os.path.normpath(candidate)
+                    for name in candidate_names:
+                        candidate = os.path.join(p_dir_clean, name)
+                        if os.path.isfile(candidate):
+                            return os.path.normpath(candidate)
         except Exception:
             pass
 
     # 4. Check KryoDisk internal bin directory
+    app_dir = get_app_dir()
     internal_candidates = [
-        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "KryptDist", "KryptDist.py"),
-        os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "bin", "KryptDist.py")
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "KryptDist", "KryptDist.exe"),
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "KryptDist", "KryptDist.py"),
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "KryptDist.exe"),
+        os.path.join(app_dir, "KryoDisk-Burner-120K_internal", "bin", "KryptDist.py"),
+        get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "bin", "KryptDist.exe")),
+        get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "bin", "KryptDist.py"))
     ]
     for c in internal_candidates:
         if os.path.isfile(c):
@@ -312,8 +344,11 @@ def locate_kryptdist(custom_path=None):
 
     # 5. Check standard C:\scripts and C:\tools locations
     standard_candidates = [
+        r"C:\scripts\KryptDist.exe",
         r"C:\scripts\KryptDist.py",
+        r"C:\tools\KryptDist\KryptDist.exe",
         r"C:\tools\KryptDist\KryptDist.py",
+        r"C:\tools\KryptDist.exe",
         r"C:\tools\KryptDist.py"
     ]
     for c in standard_candidates:
@@ -662,8 +697,7 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("Preferences")
         self.resize(580, 330)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+        icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
@@ -719,7 +753,7 @@ class PreferencesDialog(QDialog):
         eng_layout.addSpacing(10)
 
         # KryptDist Verification Engine
-        lbl_kryptdist = QLabel("<b>KryptDist Verifier (KryptDist.py):</b>")
+        lbl_kryptdist = QLabel("<b>KryptDist Verifier (KryptDist.exe / KryptDist.py):</b>")
         eng_layout.addWidget(lbl_kryptdist)
         kryptdist_row = QHBoxLayout()
         self.txt_kryptdist_path = QLineEdit()
@@ -767,7 +801,7 @@ class PreferencesDialog(QDialog):
         curr = self.txt_kryptdist_path.text().strip() or os.getcwd()
         start_dir = os.path.dirname(curr) if os.path.isfile(curr) else (curr if os.path.isdir(curr) else os.getcwd())
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select KryptDist Script (KryptDist.py)", start_dir, "Python Script (KryptDist.py *.py);;All Files (*.*)"
+            self, "Select KryptDist (KryptDist.exe / KryptDist.py)", start_dir, "KryptDist (KryptDist.exe; KryptDist.py; *.exe; *.py);;All Files (*.*)"
         )
         if path:
             self.txt_kryptdist_path.setText(os.path.normpath(path))
@@ -1335,14 +1369,33 @@ class KryptDistVerifyWorker(QThread):
 
     def run(self):
         try:
+            clean_krypt = os.path.normpath(self.kryptdist_path)
+            if clean_krypt.lower().endswith(".exe"):
+                cmd = [clean_krypt, "--headless", self.hash_path]
+            else:
+                py_exec = sys.executable if not getattr(sys, 'frozen', False) else (
+                    shutil.which("python.exe") or shutil.which("python") or shutil.which("py.exe") or "python"
+                )
+                cmd = [py_exec, clean_krypt, "--headless", self.hash_path]
+
+            startupinfo = None
+            creationflags = 0
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0
+                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+
             self._proc = subprocess.Popen(
-                [sys.executable, self.kryptdist_path, "--headless", self.hash_path],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
                 encoding='utf-8',
-                errors='replace'
+                errors='replace',
+                startupinfo=startupinfo,
+                creationflags=creationflags
             )
 
             for line in iter(self._proc.stdout.readline, ''):
@@ -1807,8 +1860,7 @@ class AddFilesFoldersDialog(QDialog):
         self.setWindowTitle("Add Files & Folders")
         self.resize(800, 480)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+        icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
@@ -1975,8 +2027,7 @@ class DiscExplorerDialog(QDialog):
         self.setWindowTitle(f"Browse Optical Disc [{self.drive_path}] - {volume_label or 'DATA_DISC'}")
         self.resize(780, 460)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+        icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
@@ -2098,12 +2149,12 @@ class KryoDiskBurnerApp(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"KryoDisk Burner 120K v{APP_VERSION}")
         
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        internal_dir = os.path.join(script_dir, "KryoDisk-Burner-120K_internal")
+        app_dir = get_app_dir()
+        internal_dir = os.path.join(app_dir, "KryoDisk-Burner-120K_internal")
         os.makedirs(internal_dir, exist_ok=True)
         self.config_file = os.path.join(internal_dir, "KryoDisk-Burner-120K.config.json")
         
-        icon_path = os.path.join(internal_dir, "icons", "kryodisk-burner-120k-icon.svg")
+        icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
             
@@ -2300,8 +2351,7 @@ class KryoDiskBurnerApp(QMainWindow):
         btn_inner_layout.setSpacing(8)
         btn_inner_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        btn_icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+        btn_icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
 
         if os.path.exists(btn_icon_path):
             pix_left = QIcon(btn_icon_path).pixmap(18, 18)
@@ -2836,8 +2886,7 @@ class KryoDiskBurnerApp(QMainWindow):
         dialog.setWindowTitle("Manual")
         dialog.resize(680, 560)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+        icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
         if os.path.exists(icon_path):
             dialog.setWindowIcon(QIcon(icon_path))
 
@@ -2934,8 +2983,7 @@ class KryoDiskBurnerApp(QMainWindow):
         dialog.setWindowTitle("About")
         dialog.resize(500, 350)
         
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        icon_path = os.path.join(script_dir, "KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg")
+        icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
         if os.path.exists(icon_path):
             dialog.setWindowIcon(QIcon(icon_path))
 
@@ -2982,9 +3030,7 @@ class KryoDiskBurnerApp(QMainWindow):
         if hasattr(self, 'settings'):
             sound_disabled = self.settings.value("disable_notification_sounds", False)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        internal_dir = os.path.join(script_dir, "KryoDisk-Burner-120K_internal")
-        icon_path = os.path.join(internal_dir, "icons", "kryodisk-burner-120k-icon.svg")
+        icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
 
         msg_box = QMessageBox(self if self.isVisible() else None)
         window_title = title if title.startswith("KryoDisk Burner 120K") else f"KryoDisk Burner 120K - {title}"
@@ -3493,15 +3539,20 @@ if __name__ == "__main__":
     if sys.platform == "win32":
         try:
             if not ctypes.windll.shell32.IsUserAnAdmin():
-                script_path = os.path.abspath(__file__)
-                script_dir = os.path.dirname(script_path)
-                params = subprocess.list2cmdline([script_path] + sys.argv[1:])
-                py_dir = os.path.dirname(sys.executable)
-                target_exe_name = "python.exe" if DEV_DEBUG else "pythonw.exe"
-                target_exe = os.path.join(py_dir, target_exe_name)
-                executable = target_exe if os.path.exists(target_exe) else sys.executable
+                if getattr(sys, 'frozen', False):
+                    executable = sys.executable
+                    params = subprocess.list2cmdline(sys.argv[1:])
+                    work_dir = os.path.dirname(executable)
+                else:
+                    script_path = os.path.abspath(__file__)
+                    work_dir = os.path.dirname(script_path)
+                    params = subprocess.list2cmdline([script_path] + sys.argv[1:])
+                    py_dir = os.path.dirname(sys.executable)
+                    target_exe_name = "python.exe" if DEV_DEBUG else "pythonw.exe"
+                    target_exe = os.path.join(py_dir, target_exe_name)
+                    executable = target_exe if os.path.exists(target_exe) else sys.executable
                 ret = ctypes.windll.shell32.ShellExecuteW(
-                    None, "runas", executable, params, script_dir, 1
+                    None, "runas", executable, params, work_dir, 1
                 )
                 sys.exit(0 if ret > 32 else 1)
         except Exception:
