@@ -15,9 +15,9 @@ The utility couples direct COM-level hardware communication with an intuitive du
 
 Key operational features include:
 1. **Universal Optical Media Support:** Authors and writes directly to standard write-once optical formats: CD-R, DVD-R, DVD+R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL). Rewritable media (CD-RW, DVD±RW, BD-RE) are supported for development and testing under `-DevDebug`.
-2. **Dual Burning Engine Architecture:** Choose between **CDBurnerXP CLI** (`cdbxpcmd.exe`) for headless track-level burning or **ImgBurn** (`ImgBurn.exe`) for custom UDF 2.50 and UDF 2.60 authoring powered by instant virtual layout staging.
+2. **Dual Burning Engine Architecture:** Choose between **CDBurnerXP CLI** (`cdbxpcmd.exe`) for headless track-level burning or **ImgBurn (long paths)** (`ImgBurn.exe`) for custom UDF 2.50 and UDF 2.60 authoring with native support for long file paths powered by instant virtual layout staging.
 3. **Dual-Pane Staging Browser:** Structure your disc hierarchy using a dedicated left navigation tree and right contents view. Create virtual folders, stage custom directory trees, and remove individual files from added folders freely without engine path collisions.
-4. **Real-Time Path Length Validation:** Live status indicator actively monitors staged file and folder paths against Windows limits (260 characters for files, 248 characters for directories) with diagnostic tooltips and visual warnings.
+4. **Dynamic Path Length Validation:** Live status indicator actively monitors staged file and folder paths based on the selected engine: enforces standard Win32 limits (260 characters for files, 248 characters for directories) for CDBurnerXP, or true UDF 2.50 specifications (max 127 characters per individual file/folder name component, and up to 511 characters cumulative path length) for ImgBurn (long paths).
 5. **Dual-Explorer Add Dialog:** Browse local drives and stage multiple files and directories simultaneously through an integrated dual-pane file and folder picker.
 6. **Physical Disc Inspection:** Direct hardware inspection tool (💽) to explore and browse the physical file contents of the currently inserted disc without leaving the application.
 7. **Administrator & Hardware Elevation:** Operates with Administrator privileges to secure exclusive hardware access to optical burner drives and prevent `0x80070005 E_ACCESSDENIED` device lock errors. Add files via the built-in dual-explorer dialog or the Windows SendTo menu.
@@ -38,11 +38,11 @@ Key operational features include:
 
 | Option / Feature | Description |
 | :--- | :--- |
-| **Dual Burning Engines** | Select between CDBurnerXP CLI (`cdbxpcmd.exe`) and ImgBurn (`ImgBurn.exe`) backends. |
+| **Dual Burning Engines** | Select between CDBurnerXP CLI (`cdbxpcmd.exe`) and ImgBurn (long paths) (`ImgBurn.exe`) backends. |
 | **UDF 2.50 & 2.60 Mastering** | Builds compliant Universal Disk Format virtual file systems for universal high-capacity optical compatibility. |
 | **BDXL & Multi-Format Support** | Complete support for CD-R, DVD±R, Blu-ray, and multi-layer BDXL media up to 128GB Quad-Layer (QL). |
 | **Dual-Pane Layout Browser** | Split hierarchical browser for organizing virtual disc directories and staged payloads. |
-| **Live Path Length Validator** | Real-time monitoring of Windows path limits (260 char file / 248 char folder) to prevent burn aborts. |
+| **Live Path Length Validator** | Real-time monitoring of active engine path limits (Win32 260/248 for CDBurnerXP; UDF 2.50 127 char name / 511 char path for ImgBurn). |
 | **Dual-Explorer Add Dialog** | Simultaneous file and directory picker for quick batch staging. |
 | **Physical Disc Explorer (💽)** | Integrated browser dialog to inspect files physically present on the inserted disc. |
 | **Live Capacity Meter** | Real-time visual capacity bar displaying payload usage against media capacity with overload warnings. |
@@ -119,4 +119,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.09.26__13.49.27*
+> *2026.09.26__16.57.46*
