@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.26__12.55.38
+# VERSION: 2026.09.26__13.49.27
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.26__12.55.38"
+APP_VERSION = "2026.09.26__13.49.27"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -1114,17 +1114,53 @@ class OpticalBurnWorker(QThread):
             temp_dir = tempfile.mkdtemp(prefix="kryodisk_imgburn_")
             srclist_path = os.path.join(temp_dir, "sources.txt")
             log_path = os.path.join(temp_dir, "imgburn_session.log")
-            settings_ini_path = os.path.join(temp_dir, "imgburn_settings.ini")
+            layout_dir = os.path.join(temp_dir, "disc_layout")
+            os.makedirs(layout_dir, exist_ok=True)
 
-            with open(srclist_path, 'w', encoding='utf-8') as f:
-                for item in self.staged_paths:
-                    if isinstance(item, tuple) and len(item) == 3:
-                        rel_p, local_p, is_dir = item
-                    else:
-                        local_p = str(item)
-                    if os.path.exists(local_p):
-                        f.write(f"{local_p}\n")
-                        self.log(f"Staged payload: {os.path.basename(local_p) or local_p}")
+            def _populate_file(src_path, dst_path):
+                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                if os.path.exists(dst_path):
+                    return
+                try:
+                    os.link(src_path, dst_path)
+                except Exception:
+                    try:
+                        shutil.copy2(src_path, dst_path)
+                    except Exception:
+                        pass
+
+            for item in self.staged_paths:
+                if isinstance(item, tuple) and len(item) == 3:
+                    rel_p, local_p, is_dir = item
+                else:
+                    local_p = str(item)
+                    is_dir = os.path.isdir(local_p)
+                    rel_p = f"\\{os.path.basename(local_p)}"
+
+                clean_rel = rel_p.lstrip('\\/').replace('/', os.sep)
+                if not clean_rel:
+                    continue
+
+                target_item_path = os.path.join(layout_dir, clean_rel)
+
+                if is_dir:
+                    os.makedirs(target_item_path, exist_ok=True)
+                    if local_p and not str(local_p).startswith("virtual://") and os.path.isdir(local_p):
+                        for root, dirs, files in os.walk(local_p):
+                            rel_sub = os.path.relpath(root, local_p)
+                            curr_target = os.path.normpath(os.path.join(target_item_path, rel_sub)) if rel_sub != "." else target_item_path
+                            os.makedirs(curr_target, exist_ok=True)
+                            for f in files:
+                                _populate_file(os.path.join(root, f), os.path.join(curr_target, f))
+                    self.log(f"Staged folder: {clean_rel}")
+                else:
+                    if local_p and not str(local_p).startswith("virtual://") and os.path.isfile(local_p):
+                        _populate_file(local_p, target_item_path)
+                        self.log(f"Staged file: {clean_rel}")
+
+            with open(srclist_path, 'w', encoding='utf-8') as sf:
+                for entry in sorted(os.listdir(layout_dir), key=natural_sort_key):
+                    sf.write(f"{os.path.join(layout_dir, entry)}\n")
 
             clean_speed = "MAX"
             if self.speed_label:
@@ -1197,8 +1233,6 @@ class OpticalBurnWorker(QThread):
                         if p_id.value == target_pid:
                             if user32.IsWindowVisible(hwnd):
                                 user32.ShowWindow(hwnd, 0)  # SW_HIDE
-                                user32.PostMessageW(hwnd, 0x0111, 6, 0)  # IDYES
-                                user32.PostMessageW(hwnd, 0x0111, 1, 0)  # IDOK
 
                             title_buf = ctypes.create_unicode_buffer(512)
                             length = user32.GetWindowTextW(hwnd, title_buf, 512)
@@ -1307,62 +1341,150 @@ class DiscEraseWorker(QThread):
 
         self.log_message.emit(f"Starting Quick Erase on BD-RE/Rewritable drive {target_dest}...")
 
-        # 1. Direct raw sector zeroing of Volume Descriptors (LBA 0 to LBA 2048)
-        wiped_sectors = False
-        try:
-            GENERIC_READ = 0x80000000
-            GENERIC_WRITE = 0x40000000
-            FILE_SHARE_READ = 1
-            FILE_SHARE_WRITE = 2
-            OPEN_EXISTING = 3
-            FSCTL_LOCK_VOLUME = 0x00090018
-            FSCTL_DISMOUNT_VOLUME = 0x00090020
-            FSCTL_UNLOCK_VOLUME = 0x0009001C
+        startupinfo = None
+        creationflags = 0
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+            creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
 
-            h_dev = ctypes.windll.kernel32.CreateFileW(
-                f"\\\\.\\{target_dest}",
-                GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                None,
-                OPEN_EXISTING,
-                0,
-                None
-            )
-            if h_dev != -1:
-                bytes_ret = ctypes.c_ulong(0)
-                ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_LOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
-                ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+        erased = False
 
-                # Overwrite first 4 MB (2,000 sectors of 2048 bytes) with zeroes
-                zero_buf = ctypes.create_string_buffer(2048 * 2000)
-                bytes_written = ctypes.c_ulong(0)
-                res = ctypes.windll.kernel32.WriteFile(h_dev, zero_buf, len(zero_buf), ctypes.byref(bytes_written), None)
-                ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_UNLOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
-                ctypes.windll.kernel32.CloseHandle(h_dev)
-                if res:
-                    wiped_sectors = True
-                    self.log_message.emit("Primary UDF volume descriptors and anchor pointers zeroed successfully.")
-        except Exception as e:
-            self.log_message.emit(f"Direct raw sector wipe note: {e}")
+        # 1. Primary: CDBurnerXP CLI headless erase
+        cdbxp_exe = locate_cdbxpcmd(self.custom_cdbxp_path)
+        if cdbxp_exe:
+            self.log_message.emit(f"Executing Quick Erase via CDBurnerXP ({target_dest})...")
+            device_arg = "0"
+            try:
+                res_list = subprocess.run(
+                    [cdbxp_exe, "--list-drives"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
+                )
+                for line in res_list.stdout.splitlines():
+                    if target_dest.upper() in line.upper() and "(" in line and ")" in line:
+                        idx_str = line.split("(")[1].split(")")[0].strip()
+                        if idx_str.isdigit():
+                            device_arg = idx_str
+                            break
+            except Exception:
+                pass
 
-        # 2. Native Windows Quick Format fallback if raw write was blocked by drive firmware
-        if not wiped_sectors:
+            cmd = [cdbxp_exe, "--erase", f"-device:{device_arg}"]
+            try:
+                res = subprocess.run(cmd, startupinfo=startupinfo, creationflags=creationflags, capture_output=True, text=True)
+                if res.returncode == 0:
+                    self.log_message.emit("CDBurnerXP quick erase completed successfully.")
+                    erased = True
+            except Exception as ce:
+                self.log_message.emit(f"CDBurnerXP erase note: {ce}")
+
+        # 2. Windows IMAPI2 native COM erase interface
+        if not erased and HAS_WIN32COM and self.drive_id:
+            try:
+                self.log_message.emit("Attempting Windows IMAPI2 native format/erase...")
+                pythoncom.CoInitialize()
+                recorder = win32com.client.Dispatch("IMAPI2.MsftDiscRecorder2")
+                recorder.InitializeDiscRecorder(self.drive_id)
+                eraser = win32com.client.Dispatch("IMAPI2.MsftDiscFormat2Erase")
+                if eraser.IsRecorderSupported(recorder):
+                    eraser.Recorder = recorder
+                    eraser.FullErase = False
+                    eraser.EraseMedia()
+                    erased = True
+                    self.log_message.emit("IMAPI2 erase completed successfully.")
+            except Exception as ie:
+                self.log_message.emit(f"IMAPI2 erase note: {ie}")
+            finally:
+                pythoncom.CoUninitialize()
+
+        # 3. Direct raw sector zeroing of Primary (LBA 0..2000) and Backup (Last 2000 LBA) UDF Anchors
+        if not erased:
+            try:
+                GENERIC_READ = 0x80000000
+                GENERIC_WRITE = 0x40000000
+                FILE_SHARE_READ = 1
+                FILE_SHARE_WRITE = 2
+                OPEN_EXISTING = 3
+                FSCTL_LOCK_VOLUME = 0x00090018
+                FSCTL_DISMOUNT_VOLUME = 0x00090020
+                FSCTL_UNLOCK_VOLUME = 0x0009001C
+                IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
+
+                h_dev = ctypes.windll.kernel32.CreateFileW(
+                    f"\\\\.\\{target_dest}",
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    None,
+                    OPEN_EXISTING,
+                    0,
+                    None
+                )
+                if h_dev != -1:
+                    bytes_ret = ctypes.c_ulong(0)
+                    ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_LOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                    ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+
+                    zero_buf = ctypes.create_string_buffer(2048 * 2000)
+                    bytes_written = ctypes.c_ulong(0)
+                    res1 = ctypes.windll.kernel32.WriteFile(h_dev, zero_buf, len(zero_buf), ctypes.byref(bytes_written), None)
+
+                    disc_len = ctypes.c_int64(0)
+                    if ctypes.windll.kernel32.DeviceIoControl(h_dev, IOCTL_DISK_GET_LENGTH_INFO, None, 0, ctypes.byref(disc_len), 8, ctypes.byref(bytes_ret), None):
+                        if disc_len.value > len(zero_buf):
+                            seek_pos = ctypes.c_int64(disc_len.value - len(zero_buf))
+                            ctypes.windll.kernel32.SetFilePointerEx(h_dev, seek_pos, None, 0)
+                            ctypes.windll.kernel32.WriteFile(h_dev, zero_buf, len(zero_buf), ctypes.byref(bytes_written), None)
+
+                    ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_UNLOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                    ctypes.windll.kernel32.CloseHandle(h_dev)
+                    if res1:
+                        erased = True
+                        self.log_message.emit("Primary and backup UDF volume descriptors zeroed successfully.")
+            except Exception as e:
+                self.log_message.emit(f"Direct raw sector wipe note: {e}")
+
+        # 4. Native Windows Quick Format fallback
+        if not erased:
             self.log_message.emit("Performing Windows native UDF quick format...")
             try:
                 cmd = f"format {target_dest} /FS:UDF /Q /V:DATA_DISC /Y"
                 res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                 if res.returncode == 0:
-                    wiped_sectors = True
+                    erased = True
                     self.log_message.emit("Native UDF quick format completed successfully.")
                 else:
                     self.log_message.emit(f"Format output: {res.stdout.strip()} {res.stderr.strip()}")
             except Exception as fe:
                 self.log_message.emit(f"Native format note: {fe}")
 
-        if wiped_sectors:
+        # Force Windows filesystem driver to dismount and invalidate any cached media tree
+        try:
+            FSCTL_DISMOUNT_VOLUME = 0x00090020
+            h_dev = ctypes.windll.kernel32.CreateFileW(
+                f"\\\\.\\{target_dest}",
+                0x80000000 | 0x40000000,
+                1 | 2,
+                None,
+                3,
+                0,
+                None
+            )
+            if h_dev != -1:
+                bytes_ret = ctypes.c_ulong(0)
+                ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                ctypes.windll.kernel32.CloseHandle(h_dev)
+        except Exception:
+            pass
+
+        if erased:
             self.erase_finished.emit(True, "")
         else:
-            self.erase_finished.emit(False, "Failed to zero volume descriptors on BD-RE media.")
+            self.erase_finished.emit(False, "Failed to erase BD-RE media.")
 
 
 class KryptDistVerifyWorker(QThread):
@@ -3210,25 +3332,27 @@ class KryoDiskBurnerApp(QMainWindow):
             f"across CD, DVD, Blu-ray (BD-R/RE), and high-capacity BDXL media (up to 128GB Quad-Layer).</p>"
             f"<h2>BURNING ENGINES &amp; PREFERENCES</h2>"
             f"<ul>"
-            f"<li><b>CDBurnerXP CLI (Default):</b> Headless CLI burning engine that formats and burns data discs with live track progress.</li>"
-            f"<li><b>ImgBurn Engine:</b> Advanced authoring engine supporting customizable UDF 2.50 / UDF 2.60 file system revisions.</li>"
+            f"<li><b>CDBurnerXP CLI (Default):</b> True headless CLI burning engine that formats and burns data discs with live track progress and volume management.</li>"
+            f"<li><b>ImgBurn Engine:</b> Advanced optical authoring engine supporting customizable UDF 2.50 and UDF 2.60 revisions, powered by instant NTFS virtual layout staging.</li>"
             f"<li><b>KryptDist Verifier (KryptDist.py):</b> Integrated cryptographic verification engine for post-burn data validation.</li>"
             f"<li><b>Preferences (Tools -&gt; Preferences):</b> Configure custom executable/script paths or click <b>Auto-Detect</b> for CDBurnerXP, ImgBurn, and KryptDist, as well as notification sound toggles.</li>"
             f"<li><b>GUI Themes:</b> Switch between <b>Dark</b>, <b>Light</b>, or <b>System</b> theme under <b>Tools -&gt; Themes</b>.</li>"
             f"</ul>"
             f"<h2>DISC STAGING &amp; LAYOUT</h2>"
             f"<ul>"
-            f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Navigate virtual folders and arrange files before burning.</li>"
+            f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Create virtual folders, add custom directories, and remove individual files from staged folders freely.</li>"
             f"<li><b>Adding Data:</b> Use the <b>➕ Add Files &amp; Folders</b> dual-explorer dialog, send items via Windows <b>SendTo</b>, or pass paths on startup.</li>"
-            f"<li><b>Multisession &amp; Session Appending:</b> Leave <i>Finalize Disc</i> unchecked to permit burning additional sessions later. Existing sessions on appendable media are automatically loaded into the staging tree.</li>"
+            f"<li><b>Path Length Validation:</b> Live status indicator monitors total path lengths against Windows limits (260 chars for files, 248 chars for directories) to prevent engine errors.</li>"
+            f"<li><b>Session Finalization:</b> Discs are always closed and finalized on burn completion to guarantee broad optical drive compatibility and long-term archival data integrity.</li>"
             f"<li><b>Volume Label:</b> Specify a custom disc label (up to 32 characters in accordance with UDF standards).</li>"
             f"<li><b>Capacity Gauging:</b> Real-time capacity bar dynamically compares staged payloads against free disc media space with overload warnings.</li>"
             f"</ul>"
             f"<h2>HARDWARE &amp; MEDIA SUPPORT</h2>"
             f"<ul>"
-            f"<li><b>Supported Formats:</b> CD-R/RW, DVD±R/RW, DVD±R DL (Dual Layer), BD-R/RE (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL).</li>"
+            f"<li><b>Supported Media:</b> Write-once optical media including CD-R, DVD±R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL). Rewritable media (CD-RW, DVD±RW, BD-RE) are reserved strictly for DevDebug development.</li>"
             f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.) with automatic media recommendations.</li>"
             f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
+            f"<li><b>Rewritable Media Quick Erase (<code>🧹</code>):</b> In DevDebug mode, performs a fast single-pass erase utilizing CDBurnerXP CLI, Windows IMAPI2, and dual primary/backup UDF descriptor zeroing.</li>"
             f"</ul>"
             f"<h2>POST-BURN INTEGRITY VERIFICATION</h2>"
             f"<ul>"
