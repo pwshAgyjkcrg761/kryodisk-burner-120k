@@ -6,30 +6,31 @@
 ![KryoDisk Burner 120K Dark Mode Main Interface](images/KryoDisk-py_dark_mode_main.png)
 
 ## Overview
-KryoDisk Burner 120K™ is an optical disc mastering and burning application for Windows. Utilizing integrated **CDBurnerXP CLI (cdbxpcmd.exe)** and **ImgBurn / ImgBurnPortable** engines alongside the Windows Image Mastering API v2.0 (IMAPI2), it authors compliant **Universal Disk Format (UDF 2.50 / UDF 2.60)** file systems and writes them directly to CD, DVD, Blu-ray (BD-R/RE), and high-density BDXL media (up to 128GB Quad-Layer).
+KryoDisk Burner 120K™ is a dedicated optical disc authoring and burning application for Windows. Utilizing integrated **CDBurnerXP CLI (cdbxpcmd.exe)** and **ImgBurn / ImgBurnPortable** engines alongside the Windows Image Mastering API v2.0 (IMAPI2), it authors compliant **Universal Disk Format (UDF 2.50 / UDF 2.60)** file systems and writes finalized single-session discs to CD, DVD, Blu-ray (BD-R), and high-density BDXL media (up to 128GB Quad-Layer).
 
-**Primary Environment:** Developed and tested on **Python 3.14.5** using the **PyQt6** framework and **pywin32** COM interfaces. It is designed for archivists, system administrators, and storage specialists who require reliable optical media authoring, flexible multisession management, configurable burning backends, and seamless post-burn cryptographic integrity verification.
+**Primary Environment:** Developed and tested on **Python 3.14.5** using the **PyQt6** framework and **pywin32** COM interfaces. It is designed for archivists, system administrators, and storage specialists who require reliable optical media authoring, guaranteed session finalization, configurable burning backends, and seamless post-burn cryptographic integrity verification.
 
 ### The Authoring & Burning Engine
 The utility couples direct COM-level hardware communication with an intuitive dual-pane disc layout manager, configurable burning backends, and automated post-burn verification.
 
 Key operational features include:
-1. **Universal Optical Media Support:** Authors and burns to all standard optical formats: CD-R, CD-RW, DVD-R, DVD+R, DVD-RW, DVD+RW, DVD±R DL (Dual Layer), DVD-RAM, BD-R, BD-RE, BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL).
-2. **Dual Burning Engine Architecture:** Choose between **CDBurnerXP CLI** (`cdbxpcmd.exe`) for headless track-level burning or **ImgBurn** (`ImgBurn.exe`) for advanced custom UDF 2.50 and UDF 2.60 authoring.
-3. **Dual-Pane Staging Browser:** Structure your disc hierarchy using a dedicated left navigation tree and right contents view. Organize files, inspect nested directory structures, and create custom virtual folder layouts before committing to disc.
-4. **Dual-Explorer Add Dialog:** Browse local drives and stage multiple files and directories simultaneously through an integrated dual-pane file and folder picker.
-5. **Physical Disc Inspection:** Direct hardware inspection tool (💽) to explore and browse the physical file contents of the currently inserted disc without leaving the application.
-6. **Administrator & Hardware Elevation:** Operates with Administrator privileges to secure exclusive hardware access to optical burner drives and prevent `0x80070005 E_ACCESSDENIED` device lock errors. *(Note: Direct drag-and-drop from standard Windows Explorer is restricted by Windows UIPI when running in elevated mode; use the built-in Add dialog or SendTo menu).*
-7. **Real-Time Capacity Gauging:** Dynamically gauges staged payload sizes against inserted optical disc capacity, complete with visual color changes and over-capacity warnings.
-8. **Disc Finalization & Multisession Control:** Choose between keeping media appendable for multisession writing or finalizing the disc session to maximize compatibility across standard ROM drives and players.
-9. **Hardware Tray Eject & Motorized Close:** Direct hardware controls to eject (⏏) and close/load (📥) optical drive trays via kernel IOCTL and MCI interfaces.
-10. **Dynamic Write Speed Configuration:** Queries drive firmware to expose valid write speed multipliers (e.g. 1x, 2x, 4x, 8x, 16x, 24x) alongside automatic maximum speed handling and media-specific sweet spot recommendations.
-11. **Integrated Post-Burn Verification:** When enabled, automatically scans the burned disc for checksum manifests (`.hash`, `.b3`, `.blake3`, `.sha256`, `.sha512`, `.xxh3`, `.md5`, `.sfv`, etc.) and launches **KryptDist** (`KryptDist.py`) to execute bit-level cryptographic verification.
-12. **Engines & Preferences Configuration:** Centralized **Tools > Preferences** dialog to auto-detect or manually set custom executable paths for CDBurnerXP CLI, ImgBurn, and KryptDist, as well as notification sound toggles.
-13. **Developer Debug & Quick Erase:** When launched with `-DevDebug`, unlocks the Quick Erase tool (🧹) to blank rewritable media (BD-RE, DVD-RW, CD-RW), enables verbose console telemetry, and maintains independent session finalization preferences.
-14. **Fast Startup Bypass:** Supports `-NoDriveScan` (or `-NoScan` / `-SkipDriveScan`) with `-DevDebug` to bypass the initial 5-second optical hardware query and media spin-up on startup for instantaneous application launch.
-15. **Themed UI & Notification Preferences:** Full support for Dark, Light, and System-synced palettes, paired with options to mute completion audio chimes while preserving visual status badges.
-16. **Persistent State Management:** Remembers window geometry, write speed preferences, disc labels, verification settings, custom engine paths, and theme configurations across sessions.
+1. **Universal Optical Media Support:** Authors and writes directly to standard write-once optical formats: CD-R, DVD-R, DVD+R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL). Rewritable media (CD-RW, DVD±RW, BD-RE) are supported for development and testing under `-DevDebug`.
+2. **Dual Burning Engine Architecture:** Choose between **CDBurnerXP CLI** (`cdbxpcmd.exe`) for headless track-level burning or **ImgBurn** (`ImgBurn.exe`) for custom UDF 2.50 and UDF 2.60 authoring powered by instant virtual layout staging.
+3. **Dual-Pane Staging Browser:** Structure your disc hierarchy using a dedicated left navigation tree and right contents view. Create virtual folders, stage custom directory trees, and remove individual files from added folders freely without engine path collisions.
+4. **Real-Time Path Length Validation:** Live status indicator actively monitors staged file and folder paths against Windows limits (260 characters for files, 248 characters for directories) with diagnostic tooltips and visual warnings.
+5. **Dual-Explorer Add Dialog:** Browse local drives and stage multiple files and directories simultaneously through an integrated dual-pane file and folder picker.
+6. **Physical Disc Inspection:** Direct hardware inspection tool (💽) to explore and browse the physical file contents of the currently inserted disc without leaving the application.
+7. **Administrator & Hardware Elevation:** Operates with Administrator privileges to secure exclusive hardware access to optical burner drives and prevent `0x80070005 E_ACCESSDENIED` device lock errors. Add files via the built-in dual-explorer dialog or the Windows SendTo menu.
+8. **Real-Time Capacity Gauging:** Dynamically gauges staged payload sizes against inserted optical disc capacity, complete with visual color changes and over-capacity warnings.
+9. **Guaranteed Session Finalization:** All burns are automatically closed and finalized upon completion to guarantee broad compatibility across standard optical drives, standalone media players, and long-term cold storage archives.
+10. **Hardware Tray Eject & Motorized Close:** Direct hardware controls to eject (⏏) and close/load (📥) optical drive trays via kernel IOCTL and MCI interfaces.
+11. **Dynamic Write Speed Configuration:** Queries drive firmware to expose valid write speed multipliers (e.g. 1x, 2x, 4x, 8x, 16x, 24x) alongside automatic maximum speed handling and media-specific sweet spot recommendations.
+12. **Integrated Post-Burn Verification:** When enabled, automatically scans the burned disc for checksum manifests (`.hash`, `.b3`, `.blake3`, `.sha256`, `.sha512`, `.xxh3`, `.md5`, `.sfv`, etc.) and launches **KryptDist** (`KryptDist.py`) to execute bit-level cryptographic verification.
+13. **Engines & Preferences Configuration:** Centralized **Tools > Preferences** dialog to auto-detect or manually set custom executable paths for CDBurnerXP CLI, ImgBurn, and KryptDist, as well as notification sound toggles.
+14. **Developer Debug & Quick Erase:** When launched with `-DevDebug`, unlocks the Quick Erase tool (🧹) powered by CDBurnerXP CLI and Windows IMAPI2 multi-descriptor zeroing to blank test rewritable media (BD-RE, DVD-RW, CD-RW), enables verbose console telemetry, and maintains independent session preferences.
+15. **Fast Startup Bypass:** Supports `-NoDriveScan` (or `-NoScan` / `-SkipDriveScan`) with `-DevDebug` to bypass the initial 5-second optical hardware query and media spin-up on startup for instantaneous application launch.
+16. **Themed UI & Notification Preferences:** Full support for Dark, Light, and System-synced palettes, paired with options to mute completion audio chimes while preserving visual status badges.
+17. **Persistent State Management:** Remembers window geometry, write speed preferences, disc labels, verification settings, custom engine paths, and theme configurations across sessions.
 
 ---
 
@@ -39,17 +40,18 @@ Key operational features include:
 | :--- | :--- |
 | **Dual Burning Engines** | Select between CDBurnerXP CLI (`cdbxpcmd.exe`) and ImgBurn (`ImgBurn.exe`) backends. |
 | **UDF 2.50 & 2.60 Mastering** | Builds compliant Universal Disk Format virtual file systems for universal high-capacity optical compatibility. |
-| **BDXL & Multi-Format Support** | Complete support for CD, DVD, Blu-ray, and multi-layer BDXL media up to 128GB Quad-Layer (QL). |
+| **BDXL & Multi-Format Support** | Complete support for CD-R, DVD±R, Blu-ray, and multi-layer BDXL media up to 128GB Quad-Layer (QL). |
 | **Dual-Pane Layout Browser** | Split hierarchical browser for organizing virtual disc directories and staged payloads. |
+| **Live Path Length Validator** | Real-time monitoring of Windows path limits (260 char file / 248 char folder) to prevent burn aborts. |
 | **Dual-Explorer Add Dialog** | Simultaneous file and directory picker for quick batch staging. |
 | **Physical Disc Explorer (💽)** | Integrated browser dialog to inspect files physically present on the inserted disc. |
 | **Live Capacity Meter** | Real-time visual capacity bar displaying payload usage against media capacity with overload warnings. |
-| **Disc Finalization Control** | Finalizes sessions for maximum read compatibility or leaves media open for multisession appending. |
+| **Guaranteed Session Finalization** | Finalizes disc sessions on completion to ensure long-term archival data integrity. |
 | **Hardware Tray Controls** | Direct software-driven drive tray eject (⏏) and motorized tray close (📥) commands. |
 | **Hardware Speed Descriptors** | Queries drive firmware for supported disc write multipliers with recommended presets. |
 | **KryptDist Post-Burn Check** | Scans burned discs for `.hash` containers and verifies 100% data integrity post-burn. |
 | **Preferences & Engine Paths** | Configure and auto-detect paths for CDBurnerXP, ImgBurn, and KryptDist under **Tools > Preferences**. |
-| **Quick Erase (🧹) [DevDebug]** | Rapidly blanks volume descriptors and sessions on rewritable media (BD-RE, DVD-RW, CD-RW). |
+| **Quick Erase (🧹) [DevDebug]** | Rapidly blanks volume descriptors on rewritable media (BD-RE, DVD-RW, CD-RW) via CDBurnerXP CLI. |
 | **Instant Launch Flag** | Run with `-DevDebug -NoDriveScan` to bypass startup drive queries for instant launch. |
 | **Theme Engine** | Full support for Dark, Light, and System-synced palettes via custom `QPalette` implementation. |
 | **Sound Suppression Option** | Mutes completion and alert notification sounds while retaining visual status dialogs. |
@@ -60,7 +62,7 @@ Key operational features include:
 
 | Flag | Description |
 | :--- | :--- |
-| `-DevDebug` | Activates verbose console logging, unlocks the Quick Erase (🧹) tool on the toolbar, and uses independent finalization settings. |
+| `-DevDebug` | Activates verbose console logging, unlocks the Quick Erase (🧹) tool on the toolbar, and enables rewritable media workflows. |
 | `-NoDriveScan`<br>`-NoScan`<br>`-SkipDriveScan` | When used in conjunction with `-DevDebug`, bypasses the 5-second optical hardware query and disc spin-up on startup. Click **🔄** to query hardware on demand. |
 
 ---
@@ -117,4 +119,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.09.19__08.21.23*
+> *2026.09.26__13.49.27*
