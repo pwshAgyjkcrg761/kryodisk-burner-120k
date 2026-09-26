@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.19__08.21.23
+# VERSION: 2026.09.26__12.55.38
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.19__08.21.23"
+APP_VERSION = "2026.09.26__12.55.38"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -993,16 +993,31 @@ class OpticalBurnWorker(QThread):
                 if spd_match:
                     cmd.append(f"-speed:{spd_match.group(1)}")
 
-            # Stage folders and loose files into CDBurnerXP arguments
-            for p in self.staged_paths:
-                clean_p = os.path.normpath(p)
+            # Stage folders and loose files into CDBurnerXP arguments preserving relative paths
+            for item in self.staged_paths:
+                if isinstance(item, tuple) and len(item) == 3:
+                    rel_p, local_p, is_dir = item
+                else:
+                    local_p = str(item)
+                    is_dir = os.path.isdir(local_p)
+                    rel_p = f"\\{os.path.basename(local_p)}"
+
+                clean_p = os.path.normpath(local_p)
                 if not os.path.exists(clean_p):
                     continue
-                if os.path.isdir(clean_p):
-                    base_d = os.path.basename(clean_p)
-                    cmd.append(f"-folder[\\{base_d}]:{clean_p}")
+
+                clean_rel = rel_p.replace('/', '\\')
+                if not clean_rel.startswith('\\'):
+                    clean_rel = f"\\{clean_rel}"
+
+                if is_dir:
+                    cmd.append(f"-folder[{clean_rel}]:{clean_p}")
                 else:
-                    cmd.append(f"-file:{clean_p}")
+                    target_dir = os.path.dirname(clean_rel).rstrip('\\')
+                    if target_dir:
+                        cmd.append(f"-file[{target_dir}]:{clean_p}")
+                    else:
+                        cmd.append(f"-file:{clean_p}")
 
             cmd_line_str = subprocess.list2cmdline(cmd)
             self.status_update.emit(f"Status: Burning UDF disc via CDBurnerXP...", target_dest)
@@ -1102,10 +1117,14 @@ class OpticalBurnWorker(QThread):
             settings_ini_path = os.path.join(temp_dir, "imgburn_settings.ini")
 
             with open(srclist_path, 'w', encoding='utf-8') as f:
-                for p in self.staged_paths:
-                    if os.path.exists(p):
-                        f.write(f"{p}\n")
-                        self.log(f"Staged payload: {os.path.basename(p) or p}")
+                for item in self.staged_paths:
+                    if isinstance(item, tuple) and len(item) == 3:
+                        rel_p, local_p, is_dir = item
+                    else:
+                        local_p = str(item)
+                    if os.path.exists(local_p):
+                        f.write(f"{local_p}\n")
+                        self.log(f"Staged payload: {os.path.basename(local_p) or local_p}")
 
             clean_speed = "MAX"
             if self.speed_label:
@@ -1458,39 +1477,6 @@ def compute_path_size(path):
         pass
     return total
 
-class DiscTreePane(QTreeWidget):
-    files_dropped = pyqtSignal(list)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setDragDropMode(QTreeWidget.DragDropMode.DropOnly)
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event):
-        if event.mimeData().hasUrls():
-            paths = []
-            for url in event.mimeData().urls():
-                p = os.path.normpath(url.toLocalFile()).replace('/', os.sep)
-                if p and os.path.exists(p):
-                    paths.append(p)
-            if paths:
-                self.files_dropped.emit(paths)
-            event.acceptProposedAction()
-        else:
-            super().dropEvent(event)
-
 class DiscTableItem(QTreeWidgetItem):
     """Custom QTreeWidgetItem that sorts by natural order and raw byte sizes."""
     def __lt__(self, other):
@@ -1504,10 +1490,10 @@ class DiscTableItem(QTreeWidgetItem):
 
 class DiscBrowserWidget(QWidget):
     payload_changed = pyqtSignal(object)
+    path_status_changed = pyqtSignal(int, bool, list)  # max_len, has_violations, violations_list
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAcceptDrops(True)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1516,13 +1502,13 @@ class DiscBrowserWidget(QWidget):
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # 1. Left Tree: Disc Root & Folders
-        self.left_tree = DiscTreePane()
+        self.left_tree = QTreeWidget()
         self.left_tree.setHeaderLabels(["Disc Structure"])
         self.left_tree.header().setStretchLastSection(True)
-        self.left_tree.files_dropped.connect(self.add_paths)
+        self.left_tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
 
         # 2. Right Table: Files & Subfolders in Selected Directory
-        self.right_table = DiscTreePane()
+        self.right_table = QTreeWidget()
         self.right_table.setHeaderLabels(["Name", "Size", "Type", "Original Path"])
         self.right_table.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self.right_table.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
@@ -1536,7 +1522,6 @@ class DiscBrowserWidget(QWidget):
         self.right_table.header().setSectionsClickable(True)
         self.right_table.header().setSortIndicatorShown(True)
         self.right_table.header().setSortIndicator(0, Qt.SortOrder.AscendingOrder)
-        self.right_table.files_dropped.connect(self.add_paths)
 
         # Root Disc Node
         self.root_node = QTreeWidgetItem(self.left_tree, ["💽 DATA_DISC"])
@@ -1554,6 +1539,73 @@ class DiscBrowserWidget(QWidget):
         self.splitter.setSizes([240, 480])
 
         layout.addWidget(self.splitter)
+
+    def check_path_length_violation(self, path):
+        """Returns True if a file path (>= 260 chars) or directory (>= 248 chars) or any nested child violates limits."""
+        if not path or path.startswith("virtual://") or not os.path.exists(path):
+            return False, 0
+        max_found = len(path)
+        if os.path.isfile(path):
+            return len(path) >= 260, len(path)
+        if len(path) >= 248:
+            return True, len(path)
+        try:
+            for root, dirs, files in os.walk(path):
+                if len(root) >= 248:
+                    return True, max(max_found, len(root))
+                max_found = max(max_found, len(root))
+                for d in dirs:
+                    d_path = os.path.join(root, d)
+                    max_found = max(max_found, len(d_path))
+                    if len(d_path) >= 248:
+                        return True, max_found
+                for f in files:
+                    f_path = os.path.join(root, f)
+                    max_found = max(max_found, len(f_path))
+                    if len(f_path) >= 260:
+                        return True, max_found
+        except Exception:
+            pass
+        return False, max_found
+
+    def get_all_path_violations(self):
+        """Scans all staged paths and returns (max_path_length, list_of_violations)."""
+        staged_paths = self.get_all_paths()
+        max_len = 0
+        violations = []
+        for p in staged_paths:
+            if not os.path.exists(p):
+                continue
+            max_len = max(max_len, len(p))
+            if os.path.isfile(p):
+                if len(p) >= 260:
+                    violations.append((p, len(p), "File path >= 260 characters"))
+            elif os.path.isdir(p):
+                if len(p) >= 248:
+                    violations.append((p, len(p), "Directory path >= 248 characters"))
+                try:
+                    for root, dirs, files in os.walk(p):
+                        if len(root) >= 248:
+                            violations.append((root, len(root), "Directory path >= 248 characters"))
+                        max_len = max(max_len, len(root))
+                        for d in dirs:
+                            d_path = os.path.join(root, d)
+                            max_len = max(max_len, len(d_path))
+                            if len(d_path) >= 248:
+                                violations.append((d_path, len(d_path), "Directory path >= 248 characters"))
+                        for f in files:
+                            f_path = os.path.join(root, f)
+                            max_len = max(max_len, len(f_path))
+                            if len(f_path) >= 260:
+                                violations.append((f_path, len(f_path), "File path >= 260 characters"))
+                except Exception:
+                    pass
+        return max_len, violations
+
+    def notify_path_status(self):
+        """Emits path_status_changed signal with current maximum length and violation list."""
+        max_len, violations = self.get_all_path_violations()
+        self.path_status_changed.emit(max_len, len(violations) > 0, violations)
 
     def set_volume_label(self, label):
         self.volume_label = label.strip() or "DATA_DISC"
@@ -1596,30 +1648,29 @@ class DiscBrowserWidget(QWidget):
             self.right_table.setSortingEnabled(True)
             return
 
-        data = folder_node.data(0, Qt.ItemDataRole.UserRole) or {}
+        data = dict(folder_node.data(0, Qt.ItemDataRole.UserRole) or {})
         folder_path = data.get("path", "")
-        items = list(data.get("items", []))
-
-        # If this node represents a real directory on disk / disc, enumerate its contents
-        if folder_path and os.path.exists(folder_path) and os.path.isdir(folder_path):
-            existing_names = {it["name"] for it in items}
-            try:
-                for entry in sorted(os.listdir(folder_path), key=natural_sort_key):
-                    if entry in existing_names:
-                        continue
-                    full_p = os.path.join(folder_path, entry)
-                    is_d = os.path.isdir(full_p)
-                    size_b = compute_path_size(full_p)
-                    is_disc = data.get("is_on_disc", False)
-                    items.append({
-                        "name": entry,
-                        "path": full_p,
-                        "is_dir": is_d,
-                        "size_bytes": size_b,
-                        "is_on_disc": is_disc
-                    })
-            except Exception:
-                pass
+        
+        # Populate items list from disk once on initial browse
+        if "items" not in data or data.get("items") is None:
+            items = []
+            if folder_path and os.path.exists(folder_path) and os.path.isdir(folder_path):
+                try:
+                    for entry in sorted(os.listdir(folder_path), key=natural_sort_key):
+                        full_p = os.path.join(folder_path, entry)
+                        items.append({
+                            "name": entry,
+                            "path": full_p,
+                            "is_dir": os.path.isdir(full_p),
+                            "size_bytes": compute_path_size(full_p),
+                            "is_on_disc": data.get("is_on_disc", False)
+                        })
+                except Exception:
+                    pass
+            data["items"] = items
+            folder_node.setData(0, Qt.ItemDataRole.UserRole, data)
+        else:
+            items = list(data.get("items", []))
 
         for itm in items:
             name = itm["name"]
@@ -1645,31 +1696,18 @@ class DiscBrowserWidget(QWidget):
             ])
             row.setData(0, Qt.ItemDataRole.UserRole, itm)
 
+            if not is_on_disc and orig_path:
+                is_invalid, max_item_len = self.check_path_length_violation(orig_path)
+                if is_invalid:
+                    limit_desc = "Directory >= 248 chars" if is_dir else "File path >= 260 chars"
+                    tip = f"Path length violation ({max_item_len} characters, limit: {limit_desc}). Please rename or shorten."
+                    for col_idx in range(4):
+                        row.setForeground(col_idx, QColor("#dc3545"))
+                        row.setToolTip(col_idx, tip)
+
         self.right_table.setSortingEnabled(True)
 
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event):
-        if event.mimeData().hasUrls():
-            paths = []
-            for url in event.mimeData().urls():
-                p = os.path.normpath(url.toLocalFile()).replace('/', os.sep)
-                if p and os.path.exists(p):
-                    paths.append(p)
-            self.add_paths(paths)
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+    
 
     def _populate_subfolders_tree(self, parent_tree_item, dir_path, is_on_disc=False):
         """Recursively builds the left tree hierarchy for all subfolders inside a directory."""
@@ -1684,9 +1722,13 @@ class DiscBrowserWidget(QWidget):
                         "path": sub_path,
                         "name": entry,
                         "is_dir": True,
-                        "is_on_disc": is_on_disc,
-                        "items": []
+                        "is_on_disc": is_on_disc
                     })
+                    if not is_on_disc:
+                        is_sub_invalid, max_sub_len = self.check_path_length_violation(sub_path)
+                        if is_sub_invalid:
+                            sub_node.setForeground(0, QColor("#dc3545"))
+                            sub_node.setToolTip(0, f"Path length violation ({max_sub_len} characters).")
                     self._populate_subfolders_tree(sub_node, sub_path, is_on_disc)
         except Exception:
             pass
@@ -1724,9 +1766,12 @@ class DiscBrowserWidget(QWidget):
                     "path": clean_p,
                     "name": base_name,
                     "is_dir": True,
-                    "is_on_disc": False,
-                    "items": []
+                    "is_on_disc": False
                 })
+                is_child_invalid, max_child_len = self.check_path_length_violation(clean_p)
+                if is_child_invalid:
+                    child_folder.setForeground(0, QColor("#dc3545"))
+                    child_folder.setToolTip(0, f"Path length violation ({max_child_len} characters).")
                 self._populate_subfolders_tree(child_folder, clean_p, is_on_disc=False)
 
         data["items"] = items
@@ -1735,39 +1780,184 @@ class DiscBrowserWidget(QWidget):
         target_node.setExpanded(True)
         self.refresh_right_table(target_node)
         self.payload_changed.emit(self.get_total_bytes())
+        self.notify_path_status()
 
     def set_paths(self, paths):
         self.clear_all()
         self.add_paths(paths)
 
     def remove_selected(self):
-        target_node = self.get_current_folder_node()
-        data = dict(target_node.data(0, Qt.ItemDataRole.UserRole) or {})
-        items = list(data.get("items", []))
-
         selected_table_items = self.right_table.selectedItems()
-        if not selected_table_items:
-            return
 
-        for sel in selected_table_items:
-            itm_data = sel.data(0, Qt.ItemDataRole.UserRole)
-            if itm_data:
-                name = itm_data["name"]
-                items = [it for it in items if it["name"] != name]
+        # Case 1: Item(s) selected in the Right Table
+        if selected_table_items:
+            target_node = self.get_current_folder_node()
+            data = dict(target_node.data(0, Qt.ItemDataRole.UserRole) or {})
+            folder_path = data.get("path", "")
 
-                # If directory, also remove from the left tree
-                if itm_data["is_dir"]:
+            # Ensure target_node has its items initialized
+            if "items" not in data or data.get("items") is None:
+                items = []
+                if folder_path and os.path.exists(folder_path) and os.path.isdir(folder_path):
+                    try:
+                        for entry in sorted(os.listdir(folder_path), key=natural_sort_key):
+                            fp = os.path.join(folder_path, entry)
+                            is_d = os.path.isdir(fp)
+                            sz = 0 if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
+                            items.append({
+                                "name": entry,
+                                "path": fp,
+                                "is_dir": is_d,
+                                "size_bytes": sz,
+                                "is_on_disc": data.get("is_on_disc", False)
+                            })
+                    except Exception:
+                        pass
+            else:
+                items = list(data.get("items", []))
+
+            for sel in selected_table_items:
+                itm_data = sel.data(0, Qt.ItemDataRole.UserRole) or {}
+                name = itm_data.get("name")
+                orig_p = itm_data.get("path")
+                clean_p = os.path.normcase(os.path.normpath(orig_p)) if orig_p else ""
+
+                items = [
+                    it for it in items 
+                    if it.get("name") != name and (not clean_p or os.path.normcase(os.path.normpath(it.get("path", ""))) != clean_p)
+                ]
+
+                # If directory, also remove matching child node from left tree
+                if itm_data.get("is_dir"):
                     for i in range(target_node.childCount()):
                         ch = target_node.child(i)
-                        if ch and ch.text(0) == f"📁 {name}":
+                        cdata = ch.data(0, Qt.ItemDataRole.UserRole) or {}
+                        ch_p = os.path.normcase(os.path.normpath(cdata.get("path", "")))
+                        if cdata.get("name") == name or (clean_p and ch_p == clean_p):
                             target_node.removeChild(ch)
                             break
 
-        data["items"] = items
-        target_node.setData(0, Qt.ItemDataRole.UserRole, data)
+            data["items"] = items
+            target_node.setData(0, Qt.ItemDataRole.UserRole, data)
 
-        self.refresh_right_table(target_node)
-        self.payload_changed.emit(self.get_total_bytes())
+            # Bubble fast shallow ancestor initialization
+            curr = target_node
+            while curr and curr != self.root_node:
+                p_node = curr.parent() or self.root_node
+                p_data = dict(p_node.data(0, Qt.ItemDataRole.UserRole) or {})
+                if "items" not in p_data or p_data.get("items") is None:
+                    p_path = p_data.get("path", "")
+                    if p_path and os.path.exists(p_path) and os.path.isdir(p_path):
+                        p_items = []
+                        try:
+                            for entry in sorted(os.listdir(p_path), key=natural_sort_key):
+                                fp = os.path.join(p_path, entry)
+                                is_d = os.path.isdir(fp)
+                                sz = 0 if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
+                                p_items.append({
+                                    "name": entry,
+                                    "path": fp,
+                                    "is_dir": is_d,
+                                    "size_bytes": sz,
+                                    "is_on_disc": p_data.get("is_on_disc", False)
+                                })
+                        except Exception:
+                            pass
+                        p_data["items"] = p_items
+                        p_node.setData(0, Qt.ItemDataRole.UserRole, p_data)
+                curr = p_node
+
+            self.refresh_right_table(target_node)
+            self.payload_changed.emit(self.get_total_bytes())
+            self.notify_path_status()
+            return
+
+        # Case 2: No item selected in Right Table, check Left Tree Pane (Multi-Selection Supported)
+        selected_left_items = [it for it in self.left_tree.selectedItems() if it != self.root_node]
+        if selected_left_items:
+            def _get_item_depth(item):
+                d = 0
+                c = item
+                while c:
+                    d += 1
+                    c = c.parent()
+                return d
+
+            selected_left_items.sort(key=_get_item_depth, reverse=True)
+            last_parent = self.root_node
+
+            for left_item in selected_left_items:
+                parent_node = left_item.parent() or self.root_node
+                last_parent = parent_node
+                left_data = left_item.data(0, Qt.ItemDataRole.UserRole) or {}
+                folder_name = left_data.get("name", "")
+                folder_path = left_data.get("path", "")
+                clean_fpath = os.path.normcase(os.path.normpath(folder_path)) if folder_path else ""
+
+                parent_data = dict(parent_node.data(0, Qt.ItemDataRole.UserRole) or {})
+                if "items" not in parent_data or parent_data.get("items") is None:
+                    p_path = parent_data.get("path", "")
+                    p_items = []
+                    if p_path and os.path.exists(p_path) and os.path.isdir(p_path):
+                        try:
+                            for entry in sorted(os.listdir(p_path), key=natural_sort_key):
+                                fp = os.path.join(p_path, entry)
+                                is_d = os.path.isdir(fp)
+                                sz = 0 if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
+                                p_items.append({
+                                    "name": entry,
+                                    "path": fp,
+                                    "is_dir": is_d,
+                                    "size_bytes": sz,
+                                    "is_on_disc": parent_data.get("is_on_disc", False)
+                                })
+                        except Exception:
+                            pass
+                else:
+                    p_items = list(parent_data.get("items", []))
+
+                p_items = [
+                    it for it in p_items 
+                    if it.get("name") != folder_name and (not clean_fpath or os.path.normcase(os.path.normpath(it.get("path", ""))) != clean_fpath)
+                ]
+                parent_data["items"] = p_items
+                parent_node.setData(0, Qt.ItemDataRole.UserRole, parent_data)
+
+                # Bubble fast shallow ancestor initialization
+                curr = parent_node
+                while curr and curr != self.root_node:
+                    p_node = curr.parent() or self.root_node
+                    p_data = dict(p_node.data(0, Qt.ItemDataRole.UserRole) or {})
+                    if "items" not in p_data or p_data.get("items") is None:
+                        p_path = p_data.get("path", "")
+                        if p_path and os.path.exists(p_path) and os.path.isdir(p_path):
+                            p_itms = []
+                            try:
+                                for entry in sorted(os.listdir(p_path), key=natural_sort_key):
+                                    fp = os.path.join(p_path, entry)
+                                    is_d = os.path.isdir(fp)
+                                    sz = 0 if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
+                                    p_itms.append({
+                                        "name": entry,
+                                        "path": fp,
+                                        "is_dir": is_d,
+                                        "size_bytes": sz,
+                                        "is_on_disc": p_data.get("is_on_disc", False)
+                                    })
+                            except Exception:
+                                pass
+                            p_data["items"] = p_itms
+                            p_node.setData(0, Qt.ItemDataRole.UserRole, p_data)
+                    curr = p_node
+
+                parent_node.removeChild(left_item)
+
+            self.left_tree.clearSelection()
+            self.left_tree.setCurrentItem(last_parent)
+            last_parent.setSelected(True)
+            self.refresh_right_table(last_parent)
+            self.payload_changed.emit(self.get_total_bytes())
+            self.notify_path_status()
 
     def clear_all(self):
         self.left_tree.blockSignals(True)
@@ -1779,21 +1969,104 @@ class DiscBrowserWidget(QWidget):
         self.left_tree.blockSignals(False)
         self.right_table.clear()
         self.payload_changed.emit(0)
+        self.notify_path_status()
 
     def get_total_bytes(self):
         def _calc_node_bytes(node):
             total = 0
             data = node.data(0, Qt.ItemDataRole.UserRole) or {}
+
+            # If node is a subfolder without customized items, return its disk size directly
+            if not data.get("is_root", False) and ("items" not in data or data.get("items") is None):
+                p = data.get("path", "")
+                if p and not p.startswith("virtual://") and os.path.exists(p):
+                    return compute_path_size(p)
+                return 0
+
+            child_nodes = {}
+            for i in range(node.childCount()):
+                ch = node.child(i)
+                cdata = ch.data(0, Qt.ItemDataRole.UserRole) or {}
+                c_name = cdata.get("name") or ch.text(0).replace("📁 ", "").replace("💿 ", "").replace(" [Disc]", "")
+                child_nodes[c_name] = ch
+
             for itm in data.get("items", []):
-                if not itm.get("is_on_disc", False):
-                    total += itm.get("size_bytes", 0)
+                if itm.get("is_on_disc", False):
+                    continue
+                name = itm.get("name")
+                p = itm.get("path", "")
+                if itm.get("is_dir"):
+                    if name in child_nodes:
+                        ch_node = child_nodes[name]
+                        ch_data = ch_node.data(0, Qt.ItemDataRole.UserRole) or {}
+                        if "items" in ch_data and ch_data["items"] is not None:
+                            total += _calc_node_bytes(ch_node)
+                        else:
+                            total += itm.get("size_bytes", compute_path_size(p) if os.path.exists(p) else 0)
+                    elif p and not p.startswith("virtual://") and os.path.exists(p):
+                        total += itm.get("size_bytes", compute_path_size(p))
+                else:
+                    if p and not p.startswith("virtual://") and os.path.exists(p):
+                        total += itm.get("size_bytes", 0)
             return total
         return _calc_node_bytes(self.root_node)
 
+    def get_node_disc_path(self, node):
+        """Returns the relative root-based disc directory path (e.g. '\\folder1\\folder2') for any tree node."""
+        if not node or node == self.root_node:
+            return ""
+        parts = []
+        curr = node
+        while curr and curr != self.root_node:
+            cdata = curr.data(0, Qt.ItemDataRole.UserRole) or {}
+            name = cdata.get("name") or curr.text(0).replace("📁 ", "").replace("💿 ", "").replace(" [Disc]", "")
+            if name:
+                parts.append(name)
+            curr = curr.parent()
+        parts.reverse()
+        return "\\" + "\\".join(parts)
+
+    def get_staged_items(self):
+        """Returns list of tuples: (disc_rel_path, disk_abs_path, is_dir) preserving full tree hierarchy."""
+        staged = []
+        def _collect(node):
+            data = node.data(0, Qt.ItemDataRole.UserRole) or {}
+            node_rel = self.get_node_disc_path(node)
+
+            child_nodes = {}
+            for i in range(node.childCount()):
+                ch = node.child(i)
+                cdata = ch.data(0, Qt.ItemDataRole.UserRole) or {}
+                c_name = cdata.get("name") or ch.text(0).replace("📁 ", "").replace("💿 ", "").replace(" [Disc]", "")
+                child_nodes[c_name] = ch
+
+            for itm in data.get("items", []):
+                if itm.get("is_on_disc", False):
+                    continue
+                name = itm.get("name", "")
+                p = itm.get("path", "")
+                is_dir = itm.get("is_dir", False)
+                item_rel = f"{node_rel}\\{name}".rstrip('\\')
+
+                if is_dir:
+                    if name in child_nodes:
+                        ch_node = child_nodes[name]
+                        ch_data = ch_node.data(0, Qt.ItemDataRole.UserRole) or {}
+                        if "items" in ch_data and ch_data["items"] is not None:
+                            _collect(ch_node)
+                        elif p and not p.startswith("virtual://") and os.path.exists(p):
+                            staged.append((item_rel, p, True))
+                    elif p and not p.startswith("virtual://") and os.path.exists(p):
+                        staged.append((item_rel, p, True))
+                else:
+                    if p and not p.startswith("virtual://") and os.path.exists(p):
+                        staged.append((item_rel, p, False))
+        _collect(self.root_node)
+        return staged
+
     def get_all_paths(self):
-        """Returns root-level staged paths for burning (excluding existing on-disc items)."""
-        data = self.root_node.data(0, Qt.ItemDataRole.UserRole) or {}
-        return [it["path"] for it in data.get("items", []) if not it.get("is_on_disc", False)]
+        """Returns all disk file/folder paths staged for burning."""
+        return [item[1] for item in self.get_staged_items()]
 
     def load_existing_disc_session(self, drive_letter):
         """Loads and displays existing session files and folders from an appendable optical disc."""
@@ -2162,14 +2435,7 @@ class KryoDiskBurnerApp(QMainWindow):
             myappid = f"pwshAgyjkcrg761.kryodiskburner120k.{APP_VERSION}"
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
             
-        # Allow Windows Explorer drag & drop messages across Administrator UIPI boundary
-        if sys.platform == "win32":
-            try:
-                # MSGFLT_ALLOW = 1; WM_DROPFILES = 0x0233; WM_COPYDATA = 0x004A; WM_COPYGLOBALDATA = 0x0049
-                for msg in (0x0233, 0x004A, 0x0049):
-                    ctypes.windll.user32.ChangeWindowMessageFilter(msg, 1)
-            except Exception:
-                pass
+        
 
         self.default_size = (800, 500)
         self.settings = SettingsWrapper(self.config_file)
@@ -2244,10 +2510,17 @@ class KryoDiskBurnerApp(QMainWindow):
         layout.addWidget(self.lbl_disc_info)
 
         # 2. Disc Staging Area (AnyBurn Split Browser)
-        layout.addWidget(QLabel("Disc Staging Layout:"))
+        staging_hdr_layout = QHBoxLayout()
+        staging_hdr_layout.addWidget(QLabel("Disc Staging Layout:"))
+        staging_hdr_layout.addStretch()
+        self.lbl_path_length = QLabel("Max Path Length: 0 chars [OK]")
+        self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #28a745;")
+        staging_hdr_layout.addWidget(self.lbl_path_length)
+        layout.addLayout(staging_hdr_layout)
 
         self.path_list = DiscBrowserWidget()
         self.path_list.payload_changed.connect(self.update_capacity_meter)
+        self.path_list.path_status_changed.connect(self.update_path_status_display)
         layout.addWidget(self.path_list, 1)
 
         # File List Control Buttons
@@ -2684,6 +2957,23 @@ class KryoDiskBurnerApp(QMainWindow):
             self.lbl_capacity.setText(f"Payload: <b>{format_byte_size(total_bytes)}</b> (Insert media to gauge capacity)")
 
     
+
+    def update_path_status_display(self, max_len=0, has_violations=False, violations=None):
+        """Updates the path length indicator label with live character counts and color coding."""
+        if not hasattr(self, 'lbl_path_length'):
+            return
+        if max_len == 0:
+            self.lbl_path_length.setText("Max Path Length: 0 chars [OK]")
+            self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #28a745;")
+        elif has_violations:
+            count = len(violations) if violations else 1
+            self.lbl_path_length.setText(f"Max Path Length: {max_len} chars ⚠ [{count} Item(s) Too Long!]")
+            self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #dc3545;")
+            self.lbl_path_length.setToolTip("One or more files (>= 260 chars) or folders (>= 248 chars) exceed Windows path limits.")
+        else:
+            self.lbl_path_length.setText(f"Max Path Length: {max_len} / 259 chars [OK]")
+            self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #28a745;")
+            self.lbl_path_length.setToolTip("All staged paths are within standard Windows/UDF path limits.")
 
     def load_saved_settings(self):
         if os.path.exists(self.config_file):
@@ -3149,6 +3439,26 @@ class KryoDiskBurnerApp(QMainWindow):
             self.show_alert("No Files", "Please add files or folders to burn to the disc.", icon_type="warning")
             return
 
+        # Check for path / filename length limit violations
+        max_len, violations = self.path_list.get_all_path_violations()
+        if violations:
+            sample_list = []
+            for item_p, length, reason in violations[:5]:
+                base_n = os.path.basename(item_p) or item_p
+                sample_list.append(f"• {base_n} ({length} chars) - {reason}")
+            if len(violations) > 5:
+                sample_list.append(f"... and {len(violations) - 5} more item(s).")
+
+            sample_str = "\n".join(sample_list)
+            self.show_alert(
+                "Path Length Limit Exceeded",
+                f"Cannot burn disc: {len(violations)} staged file(s) or folder(s) exceed maximum Windows / burning engine path limits (260 characters for files, 248 for directories):\n\n"
+                f"{sample_str}\n\n"
+                "Please shorten folder or file names before burning to prevent engine errors and skipped files.",
+                icon_type="error"
+            )
+            return
+
         total_bytes = self.path_list.get_total_bytes()
         media_info = getattr(self, 'current_media_info', {})
         media_code = media_info.get("media_type_code", 0)
@@ -3218,8 +3528,9 @@ class KryoDiskBurnerApp(QMainWindow):
         custom_cdbxp = self.settings.value("custom_cdbxpcmd_path", "")
         custom_img = self.settings.value("custom_imgburn_path", "")
 
+        staged_items = self.path_list.get_staged_items()
         self.worker = OpticalBurnWorker(
-            drive_id, fallback_letter, targets, volume_label=vol_label,
+            drive_id, fallback_letter, staged_items, volume_label=vol_label,
             udf_revision=udf_rev, eject_when_done=eject_done,
             finalize_disc=finalize_done,
             custom_cdbxpcmd_path=custom_cdbxp,
