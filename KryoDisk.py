@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.26__16.57.46
+# VERSION: 2026.09.27__11.53.30
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.26__16.57.46"
+APP_VERSION = "2026.09.27__11.53.30"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -1111,24 +1111,24 @@ class OpticalBurnWorker(QThread):
             self.log(f"Volume Label: {self.volume_label} | File System: UDF {self.udf_revision}")
             self.log(f"Write Speed: {self.speed_label}")
 
-            temp_dir = tempfile.mkdtemp(prefix="kryodisk_imgburn_")
+            # Locate root drive of the payload so hardlinks reside on the same NTFS volume
+            payload_drive = ""
+            for item in self.staged_paths:
+                p = item[1] if isinstance(item, tuple) and len(item) == 3 else str(item)
+                if p and not str(p).startswith("virtual://") and os.path.exists(p):
+                    drive_letter = os.path.splitdrive(os.path.abspath(p))[0]
+                    if drive_letter:
+                        payload_drive = f"{drive_letter}\\"
+                        break
+
+            temp_parent = payload_drive if (payload_drive and os.path.isdir(payload_drive)) else None
+            temp_dir = tempfile.mkdtemp(prefix="KryptDist_temp_", dir=temp_parent)
             srclist_path = os.path.join(temp_dir, "sources.txt")
             log_path = os.path.join(temp_dir, "imgburn_session.log")
-            layout_dir = os.path.join(temp_dir, "disc_layout")
-            os.makedirs(layout_dir, exist_ok=True)
 
-            def _populate_file(src_path, dst_path):
-                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-                if os.path.exists(dst_path):
-                    return
-                try:
-                    os.link(src_path, dst_path)
-                except Exception:
-                    try:
-                        shutil.copy2(src_path, dst_path)
-                    except Exception:
-                        pass
-
+            # Check if user created a custom virtual subfolder hierarchy
+            has_custom_hierarchy = False
+            staged_entries = []
             for item in self.staged_paths:
                 if isinstance(item, tuple) and len(item) == 3:
                     rel_p, local_p, is_dir = item
@@ -1137,30 +1137,63 @@ class OpticalBurnWorker(QThread):
                     is_dir = os.path.isdir(local_p)
                     rel_p = f"\\{os.path.basename(local_p)}"
 
+                clean_p = os.path.normpath(local_p) if local_p and not str(local_p).startswith("virtual://") else ""
                 clean_rel = rel_p.lstrip('\\/').replace('/', os.sep)
-                if not clean_rel:
+                if not clean_p or not os.path.exists(clean_p):
                     continue
 
-                target_item_path = os.path.join(layout_dir, clean_rel)
+                if clean_rel != os.path.basename(clean_p):
+                    has_custom_hierarchy = True
 
-                if is_dir:
-                    os.makedirs(target_item_path, exist_ok=True)
-                    if local_p and not str(local_p).startswith("virtual://") and os.path.isdir(local_p):
-                        for root, dirs, files in os.walk(local_p):
-                            rel_sub = os.path.relpath(root, local_p)
-                            curr_target = os.path.normpath(os.path.join(target_item_path, rel_sub)) if rel_sub != "." else target_item_path
-                            os.makedirs(curr_target, exist_ok=True)
-                            for f in files:
-                                _populate_file(os.path.join(root, f), os.path.join(curr_target, f))
-                    self.log(f"Staged folder: {clean_rel}")
-                else:
-                    if local_p and not str(local_p).startswith("virtual://") and os.path.isfile(local_p):
-                        _populate_file(local_p, target_item_path)
-                        self.log(f"Staged file: {clean_rel}")
+                staged_entries.append((clean_rel, clean_p, is_dir))
 
-            with open(srclist_path, 'w', encoding='utf-8') as sf:
-                for entry in sorted(os.listdir(layout_dir), key=natural_sort_key):
-                    sf.write(f"{os.path.join(layout_dir, entry)}\n")
+            if not has_custom_hierarchy:
+                # Direct on-the-fly streaming: map source paths straight to ImgBurn without copying
+                with open(srclist_path, 'w', encoding='utf-8') as sf:
+                    for _, clean_p, _ in staged_entries:
+                        sf.write(f"{clean_p}\n")
+                        self.log(f"Direct source mapping: {clean_p}")
+            else:
+                # Custom virtual layout: create real directories and 100% pure NTFS hardlinks for files
+                layout_dir = os.path.join(temp_dir, "disc_layout")
+                os.makedirs(layout_dir, exist_ok=True)
+
+                for clean_rel, clean_p, is_dir in staged_entries:
+                    target_item_path = os.path.join(layout_dir, clean_rel)
+                    if is_dir:
+                        os.makedirs(target_item_path, exist_ok=True)
+                        if os.path.isdir(clean_p):
+                            for root, _, files in os.walk(clean_p):
+                                rel_sub = os.path.relpath(root, clean_p)
+                                curr_dest = os.path.normpath(os.path.join(target_item_path, rel_sub)) if rel_sub != "." else target_item_path
+                                os.makedirs(curr_dest, exist_ok=True)
+                                for f in files:
+                                    s_f = os.path.join(root, f)
+                                    d_f = os.path.join(curr_dest, f)
+                                    if not os.path.exists(d_f):
+                                        try:
+                                            os.link(s_f, d_f)
+                                        except Exception:
+                                            try:
+                                                shutil.copy2(s_f, d_f)
+                                            except Exception:
+                                                pass
+                        self.log(f"Staged real directory with hardlinks: {clean_rel}")
+                    else:
+                        os.makedirs(os.path.dirname(target_item_path), exist_ok=True)
+                        if not os.path.exists(target_item_path):
+                            try:
+                                os.link(clean_p, target_item_path)
+                            except Exception:
+                                try:
+                                    shutil.copy2(clean_p, target_item_path)
+                                except Exception:
+                                    pass
+                        self.log(f"Staged hardlinked file: {clean_rel} -> {clean_p}")
+
+                with open(srclist_path, 'w', encoding='utf-8') as sf:
+                    for entry in sorted(os.listdir(layout_dir), key=natural_sort_key):
+                        sf.write(f"{os.path.join(layout_dir, entry)}\n")
 
             clean_speed = "MAX"
             if self.speed_label:
@@ -2020,7 +2053,7 @@ class DiscBrowserWidget(QWidget):
                         for entry in sorted(os.listdir(folder_path), key=natural_sort_key):
                             fp = os.path.join(folder_path, entry)
                             is_d = os.path.isdir(fp)
-                            sz = 0 if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
+                            sz = compute_path_size(fp) if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
                             items.append({
                                 "name": entry,
                                 "path": fp,
@@ -2070,7 +2103,7 @@ class DiscBrowserWidget(QWidget):
                             for entry in sorted(os.listdir(p_path), key=natural_sort_key):
                                 fp = os.path.join(p_path, entry)
                                 is_d = os.path.isdir(fp)
-                                sz = 0 if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
+                                sz = compute_path_size(fp) if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
                                 p_items.append({
                                     "name": entry,
                                     "path": fp,
@@ -2120,7 +2153,7 @@ class DiscBrowserWidget(QWidget):
                             for entry in sorted(os.listdir(p_path), key=natural_sort_key):
                                 fp = os.path.join(p_path, entry)
                                 is_d = os.path.isdir(fp)
-                                sz = 0 if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
+                                sz = compute_path_size(fp) if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
                                 p_items.append({
                                     "name": entry,
                                     "path": fp,
@@ -2153,7 +2186,7 @@ class DiscBrowserWidget(QWidget):
                                 for entry in sorted(os.listdir(p_path), key=natural_sort_key):
                                     fp = os.path.join(p_path, entry)
                                     is_d = os.path.isdir(fp)
-                                    sz = 0 if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
+                                    sz = compute_path_size(fp) if is_d else (os.path.getsize(fp) if os.path.isfile(fp) else 0)
                                     p_itms.append({
                                         "name": entry,
                                         "path": fp,
@@ -2545,7 +2578,27 @@ class DiscExplorerDialog(QDialog):
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left Pane: Folders Tree
-        self.folder_model = QFileSystemModel()
+        class _DiscFolderModel(QFileSystemModel):
+            def hasChildren(self, parent=None):
+                if parent is None or not parent.isValid():
+                    from PyQt6.QtCore import QModelIndex
+                    return super().hasChildren(parent if parent is not None else QModelIndex())
+                p = self.filePath(parent)
+                if not p or not os.path.isdir(p):
+                    return False
+                try:
+                    with os.scandir(p) as it:
+                        for entry in it:
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    return True
+                            except OSError:
+                                pass
+                except Exception:
+                    pass
+                return False
+
+        self.folder_model = _DiscFolderModel()
         self.folder_model.setFilter(QDir.Filter.Dirs | QDir.Filter.NoDotAndDotDot)
         self.folder_model.setRootPath(self.drive_path)
 
@@ -2567,6 +2620,8 @@ class DiscExplorerDialog(QDialog):
         self.tree_right.setModel(self.file_model)
         self.tree_right.setRootIndex(self.file_model.index(self.drive_path))
         self.tree_right.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tree_right.setRootIsDecorated(False)
+        self.tree_right.setItemsExpandable(False)
         self.tree_right.setSortingEnabled(True)
         self.tree_right.header().setSectionsClickable(True)
         self.tree_right.header().setSortIndicatorShown(True)
