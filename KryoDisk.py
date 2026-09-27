@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.27__11.53.30
+# VERSION: 2026.09.27__15.59.35
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.27__11.53.30"
+APP_VERSION = "2026.09.27__15.59.35"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -459,6 +459,7 @@ def get_drive_media_info(unique_id):
         "total_capacity_bytes": 0,
         "free_capacity_bytes": 0,
         "supported_speeds_raw": [],
+        "estimated_read_speed_bytes_sec": 0,
         "is_supported": False
     }
     if not HAS_WIN32COM or not unique_id:
@@ -612,6 +613,22 @@ def get_drive_media_info(unique_id):
                 info["supported_speeds_raw"] = sorted(list(set(speeds)), reverse=True)
             except Exception:
                 info["supported_speeds_raw"] = []
+
+            # Determine realistic average optical read speed (in bytes/sec) for verification time calculation
+            # Accounts for inner-track starting speeds (~4x CAV for BD) and real filesystem read overhead
+            read_speed_bps = 0
+            if media_code in (17, 18, 19) or "BD" in base_name.upper():
+                # Blu-ray: realistic average file-read speed (~14.0 MB/s)
+                read_speed_bps = int(14.0 * 1024 * 1024)
+            elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13) or "DVD" in base_name.upper():
+                # DVD: realistic average file-read speed (~7.0 MB/s)
+                read_speed_bps = int(7.0 * 1024 * 1024)
+            elif media_code in (1, 2, 3) or "CD" in base_name.upper():
+                # CD: realistic average file-read speed (~2.5 MB/s)
+                read_speed_bps = int(2.5 * 1024 * 1024)
+            else:
+                read_speed_bps = int(10.0 * 1024 * 1024)
+            info["estimated_read_speed_bytes_sec"] = read_speed_bps
     except Exception as e:
         if DEV_DEBUG:
             print(f"IMAPI2 media info query error: {e}")
@@ -881,13 +898,13 @@ import time
 
 class OpticalBurnWorker(QThread):
     status_update = pyqtSignal(str, str)
-    progress_update = pyqtSignal(int, int, str, int, int)  # current, total, phase_msg, elapsed_sec, remaining_sec
+    progress_update = pyqtSignal(int, int, str, int, int, int)  # current, total, phase_msg, elapsed_sec, remaining_burn_sec, est_verify_sec
     log_message = pyqtSignal(str)
     burn_finished = pyqtSignal(bool, str, str)
 
     def __init__(self, drive_id, drive_letter, staged_paths, volume_label="DATA_DISC",
                  udf_revision="2.50", eject_when_done=True, finalize_disc=True,
-                 custom_cdbxpcmd_path=None, custom_imgburn_path=None):
+                 custom_cdbxpcmd_path=None, custom_imgburn_path=None, estimated_verify_sec=0):
         super().__init__()
         self.drive_id = drive_id
         self.drive_letter = drive_letter or ""
@@ -898,6 +915,8 @@ class OpticalBurnWorker(QThread):
         self.finalize_disc = finalize_disc
         self.custom_cdbxpcmd_path = custom_cdbxpcmd_path
         self.custom_imgburn_path = custom_imgburn_path
+        self.estimated_verify_sec = estimated_verify_sec
+        self.total_payload_bytes = 0
         self._is_cancelled = False
         self._proc = None
         self.speed_label = "Maximum (Auto)"
@@ -1037,6 +1056,17 @@ class OpticalBurnWorker(QThread):
                 )
 
                 current_pct = 0
+                
+                # Baseline 0% estimate: derive write speed in MB/s from speed label
+                spd_num = 4
+                spd_m = re.search(r'(\d+)\s*x', self.speed_label, re.IGNORECASE)
+                if spd_m:
+                    spd_num = max(1, int(spd_m.group(1)))
+                write_bytes_sec = int(spd_num * 4.5 * 1024 * 1024)  # ~4.5 MB/s per 1x for BD/DVD average
+                base_burn_est = (int(self.total_payload_bytes / write_bytes_sec) if write_bytes_sec > 0 else 60) + 15
+                total_burn_est = max(30, base_burn_est)
+                recalibrated_50 = False
+
                 for line in iter(self._proc.stdout.readline, ''):
                     if self._is_cancelled:
                         self._proc.terminate()
@@ -1059,17 +1089,21 @@ class OpticalBurnWorker(QThread):
                             self.status_update.emit(f"Status: Writing tracks ({current_pct}%)", target_dest)
 
                     elapsed = int(time.time() - start_time)
-                    
-                    # Calculate dynamic remaining time based on current percent
-                    calc_remaining = 0
-                    if current_pct > 0 and current_pct < 100:
-                        total_est = int(elapsed / (current_pct / 100.0))
-                        calc_remaining = max(1, total_est - elapsed)
-                    elif current_pct >= 100:
+
+                    # Re-calibrate once when reaching 50% milestone
+                    if current_pct >= 50 and not recalibrated_50 and elapsed > 5:
+                        total_burn_est = int(elapsed / (current_pct / 100.0))
+                        recalibrated_50 = True
+
+                    # Steady countdown from established estimate
+                    if current_pct >= 100:
                         calc_remaining = 0
+                    else:
+                        calc_remaining = max(1, total_burn_est - elapsed)
 
                     phase_msg = f"Writing data ({current_pct}%)" if current_pct < 100 else "Finalizing disc session..."
-                    self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining)
+                    est_v = self.estimated_verify_sec if self.verify_after else 0
+                    self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining, est_v)
 
                 self._proc.stdout.close()
                 ret = self._proc.wait()
@@ -1078,7 +1112,8 @@ class OpticalBurnWorker(QThread):
                     elapsed_total = int(time.time() - start_time)
                     mins, secs = divmod(elapsed_total, 60)
                     self.log(f"CDBurnerXP completed successfully in {mins:02d}:{secs:02d}.")
-                    self.progress_update.emit(100, 100, "Completed", elapsed_total, 0)
+                    est_v = self.estimated_verify_sec if self.verify_after else 0
+                    self.progress_update.emit(100, 100, "Completed", elapsed_total, 0, est_v)
                     self.burn_finished.emit(True, target_dest, "")
                 else:
                     self.log(f"CDBurnerXP exited with code {ret}.")
@@ -1259,24 +1294,98 @@ class OpticalBurnWorker(QThread):
                 try:
                     user32 = ctypes.windll.user32
                     EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+                    BM_CLICK = 0x00F5
+                    IDOK = 1
+                    IDYES = 6
+                    IDNO = 7
+
+                    EnumChildProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
                     def _enum_cb(hwnd, _):
                         p_id = ctypes.c_ulong()
                         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p_id))
                         if p_id.value == target_pid:
+                            # Hide all ImgBurn windows so operation remains headless
                             if user32.IsWindowVisible(hwnd):
                                 user32.ShowWindow(hwnd, 0)  # SW_HIDE
 
                             title_buf = ctypes.create_unicode_buffer(512)
                             length = user32.GetWindowTextW(hwnd, title_buf, 512)
-                            if length > 0:
-                                t_text = title_buf.value
+                            t_text = title_buf.value if length > 0 else ""
+
+                            if t_text:
                                 pct_m = re.search(r'(\d{1,3})\s*%', t_text)
                                 if pct_m:
                                     imgburn_data["pct"] = max(0, min(100, int(pct_m.group(1))))
                                     imgburn_data["title"] = t_text
                                 elif "ImgBurn" in t_text and not imgburn_data["title"]:
                                     imgburn_data["title"] = t_text
+
+                            # Check for and auto-answer ImgBurn modal confirmation popups
+                            # Class '#32770' is standard Windows dialog class
+                            class_buf = ctypes.create_unicode_buffer(256)
+                            user32.GetClassNameW(hwnd, class_buf, 256)
+                            if class_buf.value == "#32770" or "Confirm" in t_text or "ImgBurn" in t_text:
+                                children = []
+
+                                def _enum_children_cb(child_hwnd, _):
+                                    children.append(child_hwnd)
+                                    return True
+
+                                user32.EnumChildWindows(hwnd, EnumChildProc(_enum_children_cb), 0)
+                                
+                                # Gather all text from static labels and buttons in this dialog
+                                dialog_texts = []
+                                btn_yes = None
+                                btn_no = None
+                                btn_ok = None
+                                for ch in children:
+                                    ch_txt_buf = ctypes.create_unicode_buffer(512)
+                                    user32.GetWindowTextW(ch, ch_txt_buf, 512)
+                                    val = ch_txt_buf.value.strip()
+                                    if val:
+                                        dialog_texts.append(val.lower())
+                                    ctrl_id = user32.GetDlgCtrlID(ch)
+                                    if ctrl_id == IDYES or val.lower() == "&yes" or val.lower() == "yes":
+                                        btn_yes = ch
+                                    elif ctrl_id == IDNO or val.lower() == "&no" or val.lower() == "no":
+                                        btn_no = ch
+                                    elif ctrl_id == IDOK or val.lower() == "ok" or val.lower() == "&ok":
+                                        btn_ok = ch
+
+                                combined_txt = " ".join(dialog_texts)
+
+                                # 1. "This disc is not empty... All data on the disc will be overwritten!" -> Click YES
+                                if "not empty" in combined_txt or "overwritten" in combined_txt:
+                                    target_btn = btn_yes or user32.GetDlgItem(hwnd, IDYES)
+                                    if target_btn:
+                                        user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                    else:
+                                        user32.PostMessageW(hwnd, 0x0111, IDYES, 0)  # WM_COMMAND IDYES
+
+                                # 2. "You have only selected one folder... add contents...?" -> Click NO
+                                elif "only selected one folder" in combined_txt or "contents of the folder" in combined_txt:
+                                    target_btn = btn_no or user32.GetDlgItem(hwnd, IDNO)
+                                    if target_btn:
+                                        user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                    else:
+                                        user32.PostMessageW(hwnd, 0x0111, IDNO, 0)  # WM_COMMAND IDNO
+
+                                # 3. "Do you want to use this volume label?" / Volume label confirmation -> Click YES
+                                elif "volume label" in combined_txt:
+                                    target_btn = btn_yes or user32.GetDlgItem(hwnd, IDYES)
+                                    if target_btn:
+                                        user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                    else:
+                                        user32.PostMessageW(hwnd, 0x0111, IDYES, 0)  # WM_COMMAND IDYES
+
+                                # 4. Image / Disc Information summary details -> Click OK
+                                elif "information" in combined_txt or "image details" in combined_txt or "sectors:" in combined_txt or btn_ok:
+                                    target_btn = btn_ok or user32.GetDlgItem(hwnd, IDOK)
+                                    if target_btn:
+                                        user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                    else:
+                                        user32.PostMessageW(hwnd, 0x0111, IDOK, 0)  # WM_COMMAND IDOK
                         return True
 
                     user32.EnumWindows(EnumWindowsProc(_enum_cb), 0)
@@ -1286,6 +1395,17 @@ class OpticalBurnWorker(QThread):
 
             last_pos = 0
             current_pct = 0
+
+            # Baseline 0% estimate: derive write speed in MB/s from speed label
+            spd_num = 4
+            spd_m = re.search(r'(\d+)\s*x', self.speed_label, re.IGNORECASE)
+            if spd_m:
+                spd_num = max(1, int(spd_m.group(1)))
+            write_bytes_sec = int(spd_num * 4.5 * 1024 * 1024)
+            base_burn_est = (int(self.total_payload_bytes / write_bytes_sec) if write_bytes_sec > 0 else 60) + 15
+            total_burn_est = max(30, base_burn_est)
+            recalibrated_50 = False
+
             while self._proc.poll() is None:
                 if self._is_cancelled:
                     self._proc.terminate()
@@ -1319,15 +1439,23 @@ class OpticalBurnWorker(QThread):
                         pass
 
                 elapsed = int(time.time() - start_time)
-                calc_remaining = 0
-                if current_pct > 0 and current_pct < 100:
-                    total_est = int(elapsed / (current_pct / 100.0))
-                    calc_remaining = max(1, total_est - elapsed)
+
+                # Re-calibrate once when reaching 50% milestone
+                if current_pct >= 50 and not recalibrated_50 and elapsed > 5:
+                    total_burn_est = int(elapsed / (current_pct / 100.0))
+                    recalibrated_50 = True
+
+                # Steady countdown from established estimate
+                if current_pct >= 100:
+                    calc_remaining = 0
+                else:
+                    calc_remaining = max(1, total_burn_est - elapsed)
 
                 phase_title = poll_info.get("title", "") if poll_info else ""
                 clean_phase = phase_title.replace(" - ImgBurn", "").strip() if phase_title else ""
                 phase_msg = clean_phase if clean_phase else (f"Writing data ({current_pct}%)" if current_pct > 0 else "Burning...")
-                self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining)
+                est_v = self.estimated_verify_sec if self.verify_after else 0
+                self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining, est_v)
                 time.sleep(0.4)
 
             ret = self._proc.returncode
@@ -1335,7 +1463,8 @@ class OpticalBurnWorker(QThread):
                 elapsed_total = int(time.time() - start_time)
                 mins, secs = divmod(elapsed_total, 60)
                 self.log(f"ImgBurn completed successfully in {mins:02d}:{secs:02d}.")
-                self.progress_update.emit(100, 100, "Completed", elapsed_total, 0)
+                est_v = self.estimated_verify_sec if self.verify_after else 0
+                self.progress_update.emit(100, 100, "Completed", elapsed_total, 0, est_v)
                 self.burn_finished.emit(True, target_dest, "")
             else:
                 self.log(f"ImgBurn exited with error code {ret}.")
@@ -1572,6 +1701,9 @@ class KryptDistVerifyWorker(QThread):
                 creationflags=creationflags
             )
 
+            total_verify_est = 0
+            recalibrated_50 = False
+
             for line in iter(self._proc.stdout.readline, ''):
                 if self._is_cancelled:
                     self._proc.terminate()
@@ -1589,14 +1721,31 @@ class KryptDistVerifyWorker(QThread):
                             bytes_done = int(parts[1])
                             total_bytes = int(parts[2])
                             elapsed_sec = int(parts[3])
-                            eta_sec = int(parts[4])
                             curr_file = parts[5]
 
                             pct = int((bytes_done / total_bytes) * 100) if total_bytes > 0 else 0
                             speed_mb = (bytes_done / (1024.0 * 1024.0)) / max(1, elapsed_sec)
+
+                            # Establish initial baseline estimate on first progress report
+                            if total_verify_est == 0 and total_bytes > 0:
+                                total_verify_est = int(total_bytes / (14.0 * 1024 * 1024)) + 5
+
+                            # Re-calibrate once at the 50% milestone
+                            if pct >= 50 and not recalibrated_50 and elapsed_sec > 3:
+                                total_verify_est = int(elapsed_sec / (pct / 100.0))
+                                recalibrated_50 = True
+
+                            # Smooth non-jitter countdown
+                            if pct >= 100:
+                                calc_remaining = 0
+                            elif total_verify_est > 0:
+                                calc_remaining = max(1, total_verify_est - elapsed_sec)
+                            else:
+                                calc_remaining = 0
+
                             phase = f"Verifying data ({pct}%) - {speed_mb:.1f} MB/s"
                             self.status_update.emit(f"Status: {phase}", curr_file)
-                            self.progress_update.emit(pct, 100, phase, elapsed_sec, eta_sec)
+                            self.progress_update.emit(pct, 100, phase, elapsed_sec, calc_remaining)
                         except Exception:
                             pass
                 else:
@@ -3092,7 +3241,8 @@ class KryoDiskBurnerApp(QMainWindow):
                 "is_blank": False,
                 "free_capacity_bytes": 0,
                 "total_capacity_bytes": 0,
-                "supported_speeds_raw": []
+                "supported_speeds_raw": [],
+                "estimated_read_speed_bytes_sec": 0
             }
             self.lbl_disc_info.setText("Disc Status: No optical drive selected.")
             self.lbl_disc_info.setStyleSheet("color: #dc3545; font-weight: bold;")
@@ -3113,22 +3263,29 @@ class KryoDiskBurnerApp(QMainWindow):
         is_rewritable = media_code in (3, 5, 7, 10, 13, 16, 19) or any(x in media_name.upper() for x in ("-RE", "REWRITABLE", "-RW", "+RW", "RAM"))
         is_rom = media_code in (1, 4, 14, 17) or "ROM" in media_name.upper()
 
-        if free_bytes > 0:
+        total_cap = self.current_media_info.get("total_capacity_bytes", 0)
+        if is_rewritable:
+            usable_cap = free_bytes if free_bytes > 0 else total_cap
+            self.current_media_info["free_capacity_bytes"] = usable_cap
+            if is_blank:
+                status_text = f"Disc: {media_name} [Testing Media: Blank] | Usable Capacity: {format_byte_size(usable_cap)}{rec_str}"
+                self.lbl_disc_info.setStyleSheet("color: #28a745; font-weight: bold; padding: 2px 0px;")
+            else:
+                status_text = f"Disc: {media_name} [Testing Media] | Usable Capacity: {format_byte_size(usable_cap)} (Existing data will be overwritten)"
+                self.lbl_disc_info.setStyleSheet("color: #e06c00; font-weight: bold; padding: 2px 0px;")
+        elif free_bytes > 0:
             status_text = f"Disc: {media_name} ({'Blank' if is_blank else 'Appendable'}) | Free Capacity: {format_byte_size(free_bytes)}{rec_str}"
             self.lbl_disc_info.setStyleSheet("color: #28a745; font-weight: bold; padding: 2px 0px;")
         elif media_code == 0 or "No Disc" in media_name:
             status_text = f"Disc: {media_name} (No Media Inserted)"
             self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold; padding: 2px 0px;")
-        elif is_rom or (not is_rewritable and not is_blank):
+        elif is_rom or (not is_blank and free_bytes == 0):
             status_text = f"Disc: {media_name} (Finalized / Read-Only) | Free Capacity: 0 B"
             self.lbl_disc_info.setStyleSheet("color: #dc3545; font-weight: bold; padding: 2px 0px;")
-        elif is_rewritable:
-            status_text = f"Disc: {media_name} (Rewritable Full / Erase to Reuse) | Free Capacity: 0 B"
-            self.lbl_disc_info.setStyleSheet("color: #e06c00; font-weight: bold; padding: 2px 0px;")
         else:
             status_text = f"Disc: {media_name} (No Blank Media Inserted)"
             self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold; padding: 2px 0px;")
-            
+
         self.lbl_disc_info.setText(f"Disc Status: {status_text}")
         
         self.update_capacity_meter()
@@ -3511,14 +3668,18 @@ class KryoDiskBurnerApp(QMainWindow):
             f"</ul>"
             f"<h2>HARDWARE &amp; MEDIA SUPPORT</h2>"
             f"<ul>"
-            f"<li><b>Supported Media:</b> Write-once optical media including CD-R, DVD±R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL). Rewritable media (CD-RW, DVD±RW, BD-RE) are reserved strictly for DevDebug development.</li>"
+            f"<li><b>Supported Media:</b> Write-once optical media including CD-R, DVD±R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL).</li>"
+            f"<li><b>Rewritable Media Policy:</b> Rewritable media (BD-RE, CD-RW, DVD±RW, DVD-RAM) is strictly restricted to <code>-DevDebug</code> mode for development and scratch testing. In DevDebug mode, burns overwrite existing data on rewritable media instantly via sub-second UDF descriptor zeroing without requiring repetitive manual erasures.</li>"
             f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.) with automatic media recommendations.</li>"
             f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
             f"<li><b>Rewritable Media Quick Erase (<code>🧹</code>):</b> In DevDebug mode, performs a fast single-pass erase utilizing CDBurnerXP CLI, Windows IMAPI2, and dual primary/backup UDF descriptor zeroing.</li>"
             f"</ul>"
-            f"<h2>POST-BURN INTEGRITY VERIFICATION</h2>"
+            f"<h2>TIMING ESTIMATES &amp; POST-BURN INTEGRITY VERIFICATION</h2>"
             f"<ul>"
-            f"<li><b>Automated Verification:</b> When <i>Verify Disc After Burn with KryptDist</i> is checked, KryoDisk scans the burned disc for checksum manifests (<code>.hash</code>, <code>.b3</code>, <code>.sha256</code>, <code>.sha512</code>, <code>.xxh3</code>, <code>.md5</code>, <code>.sfv</code>, etc.) and performs 100% cryptographic validation.</li>"
+            f"<li><b>Pre-Burn Verification Time Estimation:</b> When verification is enabled, KryoDisk accurately estimates verify duration prior to launch using physical media read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead.</li>"
+            f"<li><b>Persistent Session Total:</b> Total session estimated duration is locked at launch (0%) and persists across both burning and verification phases for a smooth, jitter-free countdown.</li>"
+            f"<li><b>Automated Verification:</b> When <i>Verify Disc After Burn with KryptDist</i> is checked, KryoDisk scans the burned disc for checksum manifests (<code>.hash</code>, <code>.b3</code>, <code>.sha256</code>, <code>.sha512</code>, <code>.xxh3</code>, <code>.md5</code>, <code>.sfv</code>, etc.) and performs 100% cryptographic validation via KryptDist.</li>"
+            f"<li><b>Operation Log Summary:</b> Every completed session concludes with a detailed elapsed time summary breakdown (Total Elapsed Time, Burn Duration, and Verification Duration).</li>"
             f"<li><b>Safe Ejection:</b> If verification is enabled, tray ejection is held until verification completes successfully.</li>"
             f"</ul>"
             f"<h2>COMMAND LINE FLAGS &amp; DEVDEBUG</h2>"
@@ -3662,25 +3823,38 @@ class KryoDiskBurnerApp(QMainWindow):
         else:
             self.lbl_burn_detail.setText("")
 
-    def update_burn_progress(self, current, total, phase_msg, elapsed_sec, remaining_sec):
+    def update_burn_progress(self, current, total, phase_msg, elapsed_sec, remaining_sec, est_verify_sec=0):
         self.burn_progress_bar.setMaximum(total)
         self.burn_progress_bar.setValue(current)
         if phase_msg:
             self.lbl_burn_status.setText(f"Status: {phase_msg}")
 
-        el_m, el_s = divmod(max(0, elapsed_sec), 60)
+        # Compute continuous session elapsed time
+        start_t = getattr(self, 'burn_start_time', time.time())
+        session_elapsed = int(max(0, time.time() - start_t))
+        el_m, el_s = divmod(session_elapsed, 60)
         elapsed_str = f"{el_m:02d}:{el_s:02d}"
 
-        if remaining_sec > 0:
-            rem_m, rem_s = divmod(remaining_sec, 60)
-            remaining_str = f"{rem_m:02d}:{rem_s:02d}"
-            tot_m, tot_s = divmod(elapsed_sec + remaining_sec, 60)
-            total_str = f"  |  Total Est: {tot_m:02d}:{tot_s:02d}"
-        else:
-            remaining_str = "--:--"
-            total_str = ""
+        # Retrieve locked 0% session total estimate
+        total_est_sec = getattr(self, 'session_total_est_sec', 0)
+        tot_m, tot_s = divmod(total_est_sec, 60)
+        total_str = f"  |  Total Est: ~{tot_m:02d}:{tot_s:02d}" if total_est_sec > 0 else ""
 
-        self.lbl_burn_time.setText(f"Elapsed: {elapsed_str}  |  Remaining: {remaining_str}{total_str}")
+        is_verifying = getattr(self, 'verify_start_time', 0) > 0
+
+        if is_verifying:
+            rem_str = f"{remaining_sec // 60:02d}:{remaining_sec % 60:02d}" if remaining_sec > 0 else "--:--"
+            time_display = f"Elapsed: {elapsed_str}  |  Verify Remaining: {rem_str}{total_str}"
+        elif est_verify_sec > 0:
+            ver_m, ver_s = divmod(est_verify_sec, 60)
+            verify_str = f"  |  Est. Verify: ~{ver_m:02d}:{ver_s:02d}"
+            rem_str = f"{remaining_sec // 60:02d}:{remaining_sec % 60:02d}" if remaining_sec > 0 else "--:--"
+            time_display = f"Elapsed: {elapsed_str}  |  Burn Remaining: {rem_str}{verify_str}{total_str}"
+        else:
+            rem_str = f"{remaining_sec // 60:02d}:{remaining_sec % 60:02d}" if remaining_sec > 0 else "--:--"
+            time_display = f"Elapsed: {elapsed_str}  |  Remaining: {rem_str}{total_str}"
+
+        self.lbl_burn_time.setText(time_display)
 
     def handle_burn_cancel(self):
         if hasattr(self, 'worker') and self.worker.isRunning():
@@ -3780,14 +3954,75 @@ class KryoDiskBurnerApp(QMainWindow):
             )
             return
 
-        if free_bytes > 0 and total_bytes > free_bytes:
+        effective_cap = free_bytes if free_bytes > 0 else media_info.get("total_capacity_bytes", 0)
+        if effective_cap > 0 and total_bytes > effective_cap:
             self.show_alert(
                 "Capacity Exceeded",
                 f"The staged payload ({format_byte_size(total_bytes)}) exceeds the available capacity "
-                f"of the disc ({format_byte_size(free_bytes)}).\n\nPlease remove some items before burning.",
+                f"of the disc ({format_byte_size(effective_cap)}).\n\nPlease remove some items before burning.",
                 icon_type="error"
             )
             return
+
+        # Check if Rewritable media is being used outside of DevDebug mode
+        if is_rewritable and not DEV_DEBUG:
+            self.show_alert(
+                "Rewritable Media Restricted",
+                f"The inserted disc ({media_name}) is rewritable media.\n\n"
+                "Rewritable media (BD-RE, CD/DVD-RW) is restricted and only permitted when running in "
+                "DevDebug mode (-DevDebug).\n\n"
+                "Please insert write-once media (BD-R, DVD-R, CD-R) to burn.",
+                icon_type="warning"
+            )
+            return
+
+        # Handling for non-blank Rewritable media in DevDebug mode
+        if is_rewritable and not is_blank:
+            # Overwrite confirmation popup suppressed in DevDebug mode
+
+            # Sub-second UDF anchor wipe to clear stale session tables for CDBurnerXP
+            engine_choice = self.combo_engine.currentText().lower()
+            if "cdbxp" in engine_choice:
+                fallback_letter = ""
+                for d in getattr(self, 'drives', []):
+                    if d.get("id") == drive_id:
+                        fallback_letter = d.get("letter", "")
+                        break
+                target_dest = fallback_letter.rstrip('\\')
+                if target_dest and sys.platform == "win32":
+                    try:
+                        GENERIC_READ = 0x80000000
+                        GENERIC_WRITE = 0x40000000
+                        FILE_SHARE_READ = 1
+                        FILE_SHARE_WRITE = 2
+                        OPEN_EXISTING = 3
+                        FSCTL_LOCK_VOLUME = 0x00090018
+                        FSCTL_DISMOUNT_VOLUME = 0x00090020
+                        FSCTL_UNLOCK_VOLUME = 0x0009001C
+
+                        h_dev = ctypes.windll.kernel32.CreateFileW(
+                            f"\\\\.\\{target_dest}",
+                            GENERIC_READ | GENERIC_WRITE,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            None,
+                            OPEN_EXISTING,
+                            0,
+                            None
+                        )
+                        if h_dev != -1:
+                            bytes_ret = ctypes.c_ulong(0)
+                            ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_LOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                            ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+
+                            # Fast zero-out of primary anchor descriptors (LBA 0..512)
+                            zero_buf = ctypes.create_string_buffer(2048 * 512)
+                            bytes_written = ctypes.c_ulong(0)
+                            ctypes.windll.kernel32.WriteFile(h_dev, zero_buf, len(zero_buf), ctypes.byref(bytes_written), None)
+
+                            ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_UNLOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                            ctypes.windll.kernel32.CloseHandle(h_dev)
+                    except Exception:
+                        pass
 
         vol_label = self.txt_disc_label.text().strip() or "DATA_DISC"
         drive_name = self.combo_drives.currentText()
@@ -3796,10 +4031,50 @@ class KryoDiskBurnerApp(QMainWindow):
         speed_label = self.combo_speed.currentText()
 
         # Prepare Embedded Burn View
+        self.burn_start_time = time.time()
+        self.burn_duration_sec = 0
+        self.verify_start_time = 0
+
+        # Baseline 0% session total estimation
+        spd_num = 4
+        spd_m = re.search(r'(\d+)\s*x', speed_label, re.IGNORECASE)
+        if spd_m:
+            spd_num = max(1, int(spd_m.group(1)))
+        write_bytes_sec = int(spd_num * 4.5 * 1024 * 1024)
+        base_burn_sec = (int(total_bytes / write_bytes_sec) if write_bytes_sec > 0 else 60) + 15
+        
+        # Calculate estimated verification time based on payload size, optical seek latency, and drive remount
+        estimated_verify_sec = 0
+        if self.check_verify.isChecked() and total_bytes > 0:
+            read_speed_bps = media_info.get("estimated_read_speed_bytes_sec", 0)
+            if read_speed_bps <= 0:
+                read_speed_bps = int(14.0 * 1024 * 1024)
+            
+            total_file_count = 0
+            for item in self.path_list.get_staged_items():
+                p = item[1]
+                if os.path.isfile(p):
+                    total_file_count += 1
+                elif os.path.isdir(p):
+                    try:
+                        for _, _, files in os.walk(p):
+                            total_file_count += len(files)
+                    except Exception:
+                        total_file_count += 1
+
+            raw_transfer_sec = int(total_bytes / read_speed_bps)
+            seek_overhead_sec = int(total_file_count * 0.15)
+            spinup_remount_sec = 20
+            estimated_verify_sec = raw_transfer_sec + seek_overhead_sec + spinup_remount_sec
+
+        self.session_total_est_sec = max(30, base_burn_sec + estimated_verify_sec)
+        self.session_verify_est_sec = estimated_verify_sec
+
+        init_tot_m, init_tot_s = divmod(self.session_total_est_sec, 60)
         self.lbl_burn_info.setText(f"<b>Volume:</b> {vol_label} &nbsp;|&nbsp; <b>Drive:</b> {drive_name} &nbsp;|&nbsp; <b>Speed:</b> {speed_label}")
         self.lbl_burn_status.setText("Status: Initializing...")
         self.lbl_burn_detail.setText("")
-        self.lbl_burn_time.setText("Elapsed: 00:00  |  Remaining: --:--")
+        self.lbl_burn_time.setText(f"Elapsed: 00:00  |  Remaining: --:--  |  Total Est: ~{init_tot_m:02d}:{init_tot_s:02d}")
         self.txt_burn_log.clear()
         self.burn_progress_bar.setMaximum(100)
         self.burn_progress_bar.setValue(0)
@@ -3826,8 +4101,10 @@ class KryoDiskBurnerApp(QMainWindow):
             udf_revision=udf_rev, eject_when_done=eject_done,
             finalize_disc=finalize_done,
             custom_cdbxpcmd_path=custom_cdbxp,
-            custom_imgburn_path=custom_img
+            custom_imgburn_path=custom_img,
+            estimated_verify_sec=estimated_verify_sec
         )
+        self.worker.total_payload_bytes = total_bytes
         engine_str = "cdbxpcmd" if "cdbxp" in self.combo_engine.currentText().lower() else "imgburn"
         self.worker.engine = engine_str
         self.worker.speed_label = speed_label
@@ -4010,7 +4287,8 @@ class KryoDiskBurnerApp(QMainWindow):
             "is_blank": False,
             "free_capacity_bytes": 0,
             "total_capacity_bytes": 0,
-            "supported_speeds_raw": []
+            "supported_speeds_raw": [],
+            "estimated_read_speed_bytes_sec": 0
         }
         self.lbl_disc_info.setText("Disc Status: Tray Ejected / No Disc Inserted")
         self.lbl_disc_info.setStyleSheet("color: #007acc; font-weight: bold;")
@@ -4024,10 +4302,22 @@ class KryoDiskBurnerApp(QMainWindow):
         self.btn_burn_cancel.setText("Back")
         self.btn_burn_cancel.setEnabled(True)
         self.lbl_burn_detail.setText("")
+        v_now = time.time()
+        v_start = getattr(self, 'verify_start_time', v_now)
+        verify_sec = int(max(0, v_now - v_start))
+        burn_sec = getattr(self, 'burn_duration_sec', 0)
+        total_sec = burn_sec + verify_sec
+
+        tot_m, tot_s = divmod(total_sec, 60)
+        b_m, b_s = divmod(burn_sec, 60)
+        v_m, v_s = divmod(verify_sec, 60)
+        summary_str = f"Total Elapsed Time: {tot_m:02d}:{tot_s:02d} (Burn: {b_m:02d}:{b_s:02d}, Verify: {v_m:02d}:{v_s:02d})"
+
         if passed:
             self.burn_progress_bar.setValue(100)
             self.lbl_burn_status.setText("Status: Verification Succeeded (100% Match)")
             self.append_burn_log(f"[OK] Verification Passed: All files match checksums in '{hash_name}'.")
+            self.append_burn_log(summary_str)
             
             if self.check_eject.isChecked() and drive_id:
                 self.append_burn_log("Ejecting disc tray...")
@@ -4043,6 +4333,7 @@ class KryoDiskBurnerApp(QMainWindow):
             self.burn_progress_bar.setValue(0)
             self.lbl_burn_status.setText("Status: Verification Failed (Mismatch or Read Error)")
             self.append_burn_log(f"[ERROR] Verification Failed (Exit code {returncode}): Checksum mismatch or corruption detected in '{hash_name}'!")
+            self.append_burn_log(summary_str)
             self.show_alert(
                 "Verification Failed",
                 f"Burn completed, but post-burn integrity verification failed!\n\n"
@@ -4054,9 +4345,14 @@ class KryoDiskBurnerApp(QMainWindow):
     def handle_burn_finished(self, success, drive_letter, error_msg):
         self.btn_burn_cancel.setText("Back")
         self.btn_burn_cancel.setEnabled(True)
+        now = time.time()
+        start_t = getattr(self, 'burn_start_time', now)
+        self.burn_duration_sec = int(max(0, now - start_t))
 
         if not success:
             self.lbl_burn_status.setText("Status: Burn failed.")
+            mins, secs = divmod(self.burn_duration_sec, 60)
+            self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn failed)")
             self.show_alert("Burn Failed", f"Optical disc burn failed:\n\n{error_msg}", icon_type="error")
             self.refresh_drives()
             return
@@ -4071,6 +4367,8 @@ class KryoDiskBurnerApp(QMainWindow):
             if not kryptdist_path:
                 self.lbl_burn_status.setText("Status: Burn completed (Verification skipped).")
                 self.append_burn_log("Warning: KryptDist.py not found. Verification skipped.")
+                mins, secs = divmod(self.burn_duration_sec, 60)
+                self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn: {mins:02d}:{secs:02d})")
                 self.show_alert(
                     "Burn Complete",
                     f"Disc burn completed successfully!\n\n"
@@ -4103,6 +4401,7 @@ class KryoDiskBurnerApp(QMainWindow):
                 time.sleep(0.5)
 
             if first_hash_file:
+                self.verify_start_time = time.time()
                 self.append_burn_log(f"Launching KryptDist verification on: {os.path.basename(first_hash_file)}")
                 self.lbl_burn_status.setText("Status: Verifying disc integrity with KryptDist...")
                 self.burn_progress_bar.setValue(0)
@@ -4120,6 +4419,8 @@ class KryoDiskBurnerApp(QMainWindow):
             else:
                 self.lbl_burn_status.setText("Status: Burn completed (No .hash found).")
                 self.append_burn_log("No checksum file found on disc to verify.")
+                mins, secs = divmod(self.burn_duration_sec, 60)
+                self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn: {mins:02d}:{secs:02d})")
                 self.show_alert(
                     "Burn Complete",
                     "Disc burn completed successfully!\n\n"
@@ -4130,6 +4431,8 @@ class KryoDiskBurnerApp(QMainWindow):
         else:
             self.lbl_burn_status.setText("Status: Burn completed successfully.")
             self.append_burn_log("Disc burn completed successfully.")
+            mins, secs = divmod(self.burn_duration_sec, 60)
+            self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn: {mins:02d}:{secs:02d})")
             self.show_alert(
                 "Burn Complete",
                 "Disc burn completed successfully!",
