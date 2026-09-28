@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.28__14.51.05
+# VERSION: 2026.09.28__18.00.26
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.28__14.51.05"
+APP_VERSION = "2026.09.28__18.00.26"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -1647,6 +1647,73 @@ class DiscEraseWorker(QThread):
             self.erase_finished.emit(True, "")
         else:
             self.erase_finished.emit(False, "Failed to erase BD-RE media.")
+
+
+class DiscMountProbeWorker(QThread):
+    status_update = pyqtSignal(str)
+    log_message = pyqtSignal(str)
+    probe_finished = pyqtSignal(bool, str, str)  # success, first_hash_path, error_msg
+
+    def __init__(self, drive_letter, timeout_sec=15):
+        super().__init__()
+        self.drive_letter = drive_letter or ""
+        self.timeout_sec = timeout_sec
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
+    def run(self):
+        target_root = self.drive_letter if self.drive_letter.endswith(os.sep) else f"{self.drive_letter}\\"
+        self.status_update.emit(f"Status: Probing disc filesystem on {self.drive_letter} (15s timeout)...")
+        self.log_message.emit(f"Probing disc mount and filesystem on {self.drive_letter} (15s limit)...")
+
+        import threading
+
+        result_data = {"found_root": False, "hash_file": "", "err": ""}
+
+        def _probe_target():
+            try:
+                deadline = time.time() + self.timeout_sec
+                while time.time() < deadline and not self._is_cancelled:
+                    if os.path.exists(target_root):
+                        try:
+                            entries = os.listdir(target_root)
+                            if entries:
+                                result_data["found_root"] = True
+                                break
+                        except Exception:
+                            pass
+                    time.sleep(0.5)
+
+                if result_data["found_root"] and not self._is_cancelled:
+                    for root_dir, _, files in os.walk(target_root):
+                        if self._is_cancelled:
+                            break
+                        for f in files:
+                            if f.lower().endswith(CHECKSUM_EXTS):
+                                result_data["hash_file"] = os.path.join(root_dir, f)
+                                return
+            except Exception as e:
+                result_data["err"] = str(e)
+
+        probe_thread = threading.Thread(target=_probe_target, daemon=True)
+        probe_thread.start()
+
+        start_time = time.time()
+        while time.time() - start_time < self.timeout_sec:
+            if self._is_cancelled:
+                self.probe_finished.emit(False, "", "Operation cancelled by user.")
+                return
+            if not probe_thread.is_alive():
+                break
+            time.sleep(0.25)
+
+        if not result_data["found_root"]:
+            err_msg = result_data["err"] or "Filesystem not recognized or media unreadable within 15s (potential bad burn / corrupt media)."
+            self.probe_finished.emit(False, "", err_msg)
+        else:
+            self.probe_finished.emit(True, result_data["hash_file"], "")
 
 
 class KryptDistVerifyWorker(QThread):
@@ -3726,6 +3793,7 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<ul>"
             f"<li><b>Pre-Burn Verification Time Estimation:</b> When verification is enabled, KryoDisk accurately estimates verify duration prior to launch using physical media read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead.</li>"
             f"<li><b>Persistent Session Total:</b> Total session estimated duration is locked at launch (0%) and persists across both burning and verification phases for a smooth, jitter-free countdown.</li>"
+            f"<li><b>Fast Disc Check (15s Guard):</b> Prior to verification, an asynchronous background check verifies that the disc filesystem and root entries mount successfully within 15 seconds. If media damage, unreadable volume descriptors, or a bad burn prevents mounting, the session aborts cleanly without freezing the user interface.</li>"
             f"<li><b>Automated Verification:</b> When <i>Verify Disc After Burn with KryptDist</i> is checked, KryoDisk scans the burned disc for checksum manifests (<code>.hash</code>, <code>.b3</code>, <code>.sha256</code>, <code>.sha512</code>, <code>.xxh3</code>, <code>.md5</code>, <code>.sfv</code>, etc.) and performs 100% cryptographic validation via KryptDist.</li>"
             f"<li><b>Operation Log Summary:</b> Every completed session concludes with a detailed elapsed time summary breakdown (Total Elapsed Time, Burn Duration, and Verification Duration).</li>"
             f"<li><b>Safe Ejection:</b> If verification is enabled, tray ejection is held until verification completes successfully.</li>"
@@ -3919,6 +3987,11 @@ class KryoDiskBurnerApp(QMainWindow):
                 if hasattr(self, 'btn_burn_cancel'):
                     self.btn_burn_cancel.setText("Cancelling...")
                     self.btn_burn_cancel.setEnabled(False)
+        elif hasattr(self, 'probe_worker') and self.probe_worker.isRunning():
+            self.probe_worker.cancel()
+            if hasattr(self, 'btn_burn_cancel'):
+                self.btn_burn_cancel.setText("Cancelling...")
+                self.btn_burn_cancel.setEnabled(False)
         elif hasattr(self, 'verify_worker') and self.verify_worker.isRunning():
             reply = self.show_alert(
                 "Cancel Verification",
@@ -4390,6 +4463,55 @@ class KryoDiskBurnerApp(QMainWindow):
             )
         self.refresh_drives()
 
+    def on_probe_finished(self, success, first_hash_file, error_msg, drive_letter, kryptdist_path, drive_id):
+        if not success:
+            self.btn_burn_cancel.setText("Back")
+            self.btn_burn_cancel.setEnabled(True)
+            self.lbl_burn_status.setText("Status: Disc check failed (bad burn).")
+            self.append_burn_log(f"[ERROR] Fast disc check failed on {drive_letter}: {error_msg}")
+            mins, secs = divmod(self.burn_duration_sec, 60)
+            self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Verification aborted)")
+            self.show_alert(
+                "Disc Check Failed",
+                f"Burn completed, but the disc filesystem could not be loaded within 15 seconds:\n\n"
+                f"{error_msg}\n\n"
+                "This typically indicates a bad burn, unreadable media, or damaged volume descriptors.",
+                icon_type="error"
+            )
+            self.refresh_drives()
+            return
+
+        if first_hash_file:
+            self.verify_start_time = time.time()
+            self.append_burn_log(f"Launching KryptDist verification on: {os.path.basename(first_hash_file)}")
+            self.lbl_burn_status.setText("Status: Verifying disc integrity with KryptDist...")
+            self.burn_progress_bar.setValue(0)
+            self.lbl_burn_time.setText("Elapsed: 00:00  |  Remaining: --:--")
+            self.btn_burn_cancel.setText("Cancel Verify")
+            self.btn_burn_cancel.setEnabled(True)
+            self.verify_worker = KryptDistVerifyWorker(
+                kryptdist_path, first_hash_file, getattr(self, 'session_verify_est_sec', 0)
+            )
+            self.verify_worker.log_message.connect(self.append_burn_log)
+            self.verify_worker.status_update.connect(self.update_burn_status)
+            self.verify_worker.progress_update.connect(self.update_burn_progress)
+            self.verify_worker.finished.connect(
+                lambda passed, ret, hf: self.on_verify_finished(passed, ret, hf, drive_id)
+            )
+            self.verify_worker.start()
+        else:
+            self.lbl_burn_status.setText("Status: Burn completed (No .hash found).")
+            self.append_burn_log("No checksum file found on disc to verify.")
+            mins, secs = divmod(self.burn_duration_sec, 60)
+            self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn: {mins:02d}:{secs:02d})")
+            self.show_alert(
+                "Burn Complete",
+                "Disc burn completed successfully!\n\n"
+                "No .hash file was found on the burned disc to perform automated verification.",
+                icon_type="info"
+            )
+            self.refresh_drives()
+
     def handle_burn_finished(self, success, drive_letter, error_msg):
         self.btn_burn_cancel.setText("Back")
         self.btn_burn_cancel.setEnabled(True)
@@ -4409,8 +4531,6 @@ class KryoDiskBurnerApp(QMainWindow):
 
         # Perform Post-Burn Verification via KryptDist if requested
         if self.check_verify.isChecked() and drive_letter:
-            self.lbl_burn_status.setText("Status: Verifying disc with KryptDist...")
-            self.append_burn_log("Scanning disc for checksum manifests for verification...")
             kryptdist_path = self.locate_kryptdist()
             if not kryptdist_path:
                 self.lbl_burn_status.setText("Status: Burn completed (Verification skipped).")
@@ -4427,57 +4547,16 @@ class KryoDiskBurnerApp(QMainWindow):
                 self.refresh_drives()
                 return
 
-            # Find the first .hash container on the disc
-            disc_root = drive_letter if drive_letter.endswith(os.sep) else f"{drive_letter}\\"
-            first_hash_file = None
-
-            # Allow Windows shell up to 6 seconds to recognize the freshly burned UDF file system
-            for _ in range(12):
-                if os.path.exists(disc_root):
-                    try:
-                        for root_dir, _, files in os.walk(disc_root):
-                            for f in files:
-                                if f.lower().endswith(CHECKSUM_EXTS):
-                                    first_hash_file = os.path.join(root_dir, f)
-                                    break
-                            if first_hash_file:
-                                break
-                    except Exception:
-                        pass
-                if first_hash_file:
-                    break
-                time.sleep(0.5)
-
-            if first_hash_file:
-                self.verify_start_time = time.time()
-                self.append_burn_log(f"Launching KryptDist verification on: {os.path.basename(first_hash_file)}")
-                self.lbl_burn_status.setText("Status: Verifying disc integrity with KryptDist...")
-                self.burn_progress_bar.setValue(0)
-                self.lbl_burn_time.setText("Elapsed: 00:00  |  Remaining: --:--")
-                self.btn_burn_cancel.setText("Cancel Verify")
-                self.btn_burn_cancel.setEnabled(True)
-                self.verify_worker = KryptDistVerifyWorker(
-                    kryptdist_path, first_hash_file, getattr(self, 'session_verify_est_sec', 0)
-                )
-                self.verify_worker.log_message.connect(self.append_burn_log)
-                self.verify_worker.status_update.connect(self.update_burn_status)
-                self.verify_worker.progress_update.connect(self.update_burn_progress)
-                self.verify_worker.finished.connect(
-                    lambda passed, ret, hf: self.on_verify_finished(passed, ret, hf, drive_id)
-                )
-                self.verify_worker.start()
-            else:
-                self.lbl_burn_status.setText("Status: Burn completed (No .hash found).")
-                self.append_burn_log("No checksum file found on disc to verify.")
-                mins, secs = divmod(self.burn_duration_sec, 60)
-                self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn: {mins:02d}:{secs:02d})")
-                self.show_alert(
-                    "Burn Complete",
-                    "Disc burn completed successfully!\n\n"
-                    "No .hash file was found on the burned disc to perform automated verification.",
-                    icon_type="info"
-                )
-                self.refresh_drives()
+            self.lbl_burn_status.setText("Status: Probing disc filesystem (15s limit)...")
+            self.btn_burn_cancel.setText("Cancel Check")
+            self.btn_burn_cancel.setEnabled(True)
+            self.probe_worker = DiscMountProbeWorker(drive_letter, timeout_sec=15)
+            self.probe_worker.status_update.connect(lambda s: self.lbl_burn_status.setText(s))
+            self.probe_worker.log_message.connect(self.append_burn_log)
+            self.probe_worker.probe_finished.connect(
+                lambda ok, hf, err: self.on_probe_finished(ok, hf, err, drive_letter, kryptdist_path, drive_id)
+            )
+            self.probe_worker.start()
         else:
             self.lbl_burn_status.setText("Status: Burn completed successfully.")
             self.append_burn_log("Disc burn completed successfully.")
