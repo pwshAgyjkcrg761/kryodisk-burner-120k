@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.27__15.59.35
+# VERSION: 2026.09.28__14.51.05
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.27__15.59.35"
+APP_VERSION = "2026.09.28__14.51.05"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -1655,10 +1655,11 @@ class KryptDistVerifyWorker(QThread):
     finished = pyqtSignal(bool, int, str)
     log_message = pyqtSignal(str)
 
-    def __init__(self, kryptdist_path, hash_path):
+    def __init__(self, kryptdist_path, hash_path, estimated_verify_sec=0):
         super().__init__()
         self.kryptdist_path = kryptdist_path
         self.hash_path = hash_path
+        self.estimated_verify_sec = estimated_verify_sec
         self._proc = None
         self._is_cancelled = False
 
@@ -1676,18 +1677,30 @@ class KryptDistVerifyWorker(QThread):
             if clean_krypt.lower().endswith(".exe"):
                 cmd = [clean_krypt, "--headless", self.hash_path]
             else:
-                py_exec = sys.executable if not getattr(sys, 'frozen', False) else (
-                    shutil.which("python.exe") or shutil.which("python") or shutil.which("py.exe") or "python"
-                )
-                cmd = [py_exec, clean_krypt, "--headless", self.hash_path]
+                if getattr(sys, 'frozen', False):
+                    py_exec = shutil.which("python.exe") or shutil.which("python") or shutil.which("py.exe") or "python"
+                else:
+                    py_exec = sys.executable
+                    if py_exec.lower().endswith("pythonw.exe"):
+                        cand = py_exec[:-5] + ".exe"
+                        if os.path.isfile(cand):
+                            py_exec = cand
+                    elif not py_exec.lower().endswith("python.exe"):
+                        cand = os.path.join(os.path.dirname(py_exec), "python.exe")
+                        if os.path.isfile(cand):
+                            py_exec = cand
+                cmd = [py_exec, "-u", "-X", "utf8", clean_krypt, "--headless", self.hash_path]
 
             startupinfo = None
-            creationflags = 0
             if sys.platform == "win32":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = 0
-                creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+
+            proc_env = os.environ.copy()
+            proc_env["PYTHONUNBUFFERED"] = "1"
+            proc_env["PYTHONIOENCODING"] = "utf-8"
+            proc_env["PYTHONUTF8"] = "1"
 
             self._proc = subprocess.Popen(
                 cmd,
@@ -1698,60 +1711,94 @@ class KryptDistVerifyWorker(QThread):
                 encoding='utf-8',
                 errors='replace',
                 startupinfo=startupinfo,
-                creationflags=creationflags
+                creationflags=0,
+                env=proc_env
             )
 
-            total_verify_est = 0
-            recalibrated_50 = False
+            import queue
+            import threading
 
-            for line in iter(self._proc.stdout.readline, ''):
+            out_queue = queue.Queue()
+
+            def _read_output(pipe, q):
+                try:
+                    for line in iter(pipe.readline, ''):
+                        q.put(line)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
+
+            reader_t = threading.Thread(target=_read_output, args=(self._proc.stdout, out_queue), daemon=True)
+            reader_t.start()
+
+            start_time = time.time()
+            total_verify_est = getattr(self, 'estimated_verify_sec', 0)
+            recalibrated_50 = False
+            last_pct = 0
+            last_phase = "Verifying disc..."
+            last_file = ""
+
+            while self._proc.poll() is None or not out_queue.empty():
                 if self._is_cancelled:
                     self._proc.terminate()
                     self.finished.emit(False, -1, self.hash_path)
                     return
 
-                line_s = line.strip()
-                if not line_s:
-                    continue
+                while not out_queue.empty():
+                    try:
+                        line = out_queue.get_nowait()
+                    except queue.Empty:
+                        break
 
-                if line_s.startswith("VERIFY_PROGRESS:"):
-                    parts = line_s.split(":", 5)
-                    if len(parts) >= 6:
-                        try:
-                            bytes_done = int(parts[1])
-                            total_bytes = int(parts[2])
-                            elapsed_sec = int(parts[3])
-                            curr_file = parts[5]
+                    line_s = line.strip()
+                    if not line_s:
+                        continue
 
-                            pct = int((bytes_done / total_bytes) * 100) if total_bytes > 0 else 0
-                            speed_mb = (bytes_done / (1024.0 * 1024.0)) / max(1, elapsed_sec)
+                    clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line_s).strip()
+                    if "VERIFY_PROGRESS:" in clean_line:
+                        idx = clean_line.find("VERIFY_PROGRESS:")
+                        parts = clean_line[idx:].split(":", 5)
+                        if len(parts) >= 5:
+                            try:
+                                bytes_done = int(parts[1])
+                                total_bytes = int(parts[2])
+                                elapsed_sec = int(parts[3])
+                                curr_file = parts[5] if len(parts) >= 6 else parts[4]
 
-                            # Establish initial baseline estimate on first progress report
-                            if total_verify_est == 0 and total_bytes > 0:
-                                total_verify_est = int(total_bytes / (14.0 * 1024 * 1024)) + 5
+                                pct = int((bytes_done / total_bytes) * 100) if total_bytes > 0 else 0
+                                speed_mb = (bytes_done / (1024.0 * 1024.0)) / max(1, elapsed_sec)
 
-                            # Re-calibrate once at the 50% milestone
-                            if pct >= 50 and not recalibrated_50 and elapsed_sec > 3:
-                                total_verify_est = int(elapsed_sec / (pct / 100.0))
-                                recalibrated_50 = True
+                                if total_verify_est == 0 and total_bytes > 0:
+                                    total_verify_est = int(total_bytes / (14.0 * 1024 * 1024)) + 5
 
-                            # Smooth non-jitter countdown
-                            if pct >= 100:
-                                calc_remaining = 0
-                            elif total_verify_est > 0:
-                                calc_remaining = max(1, total_verify_est - elapsed_sec)
-                            else:
-                                calc_remaining = 0
+                                if pct >= 50 and not recalibrated_50 and elapsed_sec > 3:
+                                    total_verify_est = int(elapsed_sec / (pct / 100.0))
+                                    recalibrated_50 = True
 
-                            phase = f"Verifying data ({pct}%) - {speed_mb:.1f} MB/s"
-                            self.status_update.emit(f"Status: {phase}", curr_file)
-                            self.progress_update.emit(pct, 100, phase, elapsed_sec, calc_remaining)
-                        except Exception:
-                            pass
+                                last_pct = pct
+                                last_file = curr_file
+                                last_phase = f"Verifying data ({pct}%) - {speed_mb:.1f} MB/s"
+                                self.status_update.emit(f"Status: {last_phase}", last_file)
+                            except Exception:
+                                pass
+                    else:
+                        self.log_message.emit(f"[KryptDist] {clean_line}")
+
+                cur_elapsed = max(1, int(time.time() - start_time))
+                if last_pct >= 100:
+                    calc_remaining = 0
+                elif total_verify_est > 0:
+                    calc_remaining = max(1, total_verify_est - cur_elapsed)
                 else:
-                    self.log_message.emit(f"[KryptDist] {line_s}")
+                    calc_remaining = 0
 
-            self._proc.stdout.close()
+                self.progress_update.emit(last_pct, 100, last_phase, cur_elapsed, calc_remaining)
+                time.sleep(0.3)
+
             ret = self._proc.wait()
             self.finished.emit(ret == 0, ret, self.hash_path)
         except Exception as e:
@@ -3664,6 +3711,7 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Path Length Validation:</b> Dynamically monitors staged paths based on active engine: enforces Win32 limits (260 chars for files, 248 chars for directories) when CDBurnerXP is active, or UDF 2.50 specifications (max 127 chars per file/folder name, max 511 chars cumulative path length) when ImgBurn (long paths) is active.</li>"
             f"<li><b>Session Finalization:</b> Discs are always closed and finalized on burn completion to guarantee broad optical drive compatibility and long-term archival data integrity.</li>"
             f"<li><b>Volume Label:</b> Specify a custom disc label (up to 32 characters in accordance with UDF standards).</li>"
+            f"<li><b>Unicode &amp; International Characters:</b> Full end-to-end UTF-8 / Unicode support across staged layouts, disc authoring, and post-burn verification (including Japanese [Kanji, Hiragana, Katakana], CJK, Cyrillic, accents, and symbols).</li>"
             f"<li><b>Capacity Gauging:</b> Real-time capacity bar dynamically compares staged payloads against free disc media space with overload warnings.</li>"
             f"</ul>"
             f"<h2>HARDWARE &amp; MEDIA SUPPORT</h2>"
@@ -4408,7 +4456,9 @@ class KryoDiskBurnerApp(QMainWindow):
                 self.lbl_burn_time.setText("Elapsed: 00:00  |  Remaining: --:--")
                 self.btn_burn_cancel.setText("Cancel Verify")
                 self.btn_burn_cancel.setEnabled(True)
-                self.verify_worker = KryptDistVerifyWorker(kryptdist_path, first_hash_file)
+                self.verify_worker = KryptDistVerifyWorker(
+                    kryptdist_path, first_hash_file, getattr(self, 'session_verify_est_sec', 0)
+                )
                 self.verify_worker.log_message.connect(self.append_burn_log)
                 self.verify_worker.status_update.connect(self.update_burn_status)
                 self.verify_worker.progress_update.connect(self.update_burn_progress)
