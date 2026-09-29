@@ -15,8 +15,8 @@ The utility couples direct COM-level hardware communication with an intuitive du
 
 Key operational features include:
 1. **Universal Optical Media Support:** Authors and writes directly to standard write-once optical formats: CD-R, DVD-R, DVD+R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL). Rewritable media (CD-RW, DVD±RW, BD-RE) is strictly restricted to `-DevDebug` mode for development and scratch testing.
-2. **Instant Rewritable Overwrites:** In `-DevDebug` mode, burning to rewritable media automatically performs sub-second primary UDF descriptor zeroing to clear stale session tables, enabling seamless, repeated overwrites across both CDBurnerXP and ImgBurn without slow manual erasures or "no free space" errors.
-3. **Dual Burning Engine Architecture:** Choose between **CDBurnerXP CLI** (`cdbxpcmd.exe`) for headless track-level burning or **ImgBurn (long paths)** (`ImgBurn.exe`) for custom UDF 2.50 and UDF 2.60 authoring with native support for long file paths powered by instant virtual layout staging.
+2. **Instant Rewritable Overwrites & Erased Capacity:** In `-DevDebug` mode, burning to rewritable media evaluates staged payloads against the full erased physical capacity rather than leftover slack space. The action button dynamically updates to **Erase & Burn Disc**, automatically performing sub-second descriptor zeroing or auto-confirmed overwrite passes across CDBurnerXP and ImgBurn without slow manual blanking cycles.
+3. **Dual Burning Engine Architecture:** Choose between **CDBurnerXP CLI** (`cdbxpcmd.exe`) for headless track-level burning or **ImgBurn (long paths)** (`ImgBurn.exe`) for custom UDF 2.50 and UDF 2.60 authoring. All ImgBurn sessions author strictly pure UDF (ISO9660 completely disabled) to eliminate 2GB/4GB file size limits and directory depth constraints, paired with UTF-8 BOM source lists and instant virtual layout staging.
 4. **Dual-Pane Staging Browser:** Structure your disc hierarchy using a dedicated left navigation tree and right contents view. Create virtual folders, stage custom directory trees, and remove individual files from added folders freely without engine path collisions.
 5. **Dynamic Path Length Validation:** Live status indicator actively monitors staged file and folder paths based on the selected engine: enforces standard Win32 limits (260 characters for files, 248 characters for directories) for CDBurnerXP, or true UDF 2.50 specifications (max 127 characters per individual file/folder name component, and up to 511 characters cumulative path length) for ImgBurn (long paths).
 6. **Full Unicode & Japanese Character Sets:** End-to-end UTF-8 and Unicode pipeline across disc staging, UDF authoring, and post-burn verification. Complete native support for Japanese (Kanji, Hiragana, Katakana), CJK, Cyrillic, accents, and international symbols across all filenames, paths, manifests, and verification pipes.
@@ -28,12 +28,12 @@ Key operational features include:
 12. **Hardware Tray Eject & Motorized Close:** Direct hardware controls to eject (⏏) and close/load (📥) optical drive trays via kernel IOCTL and MCI interfaces.
 13. **Dynamic Write Speed Configuration:** Queries drive firmware to expose valid write speed multipliers (e.g. 1x, 2x, 4x, 8x, 16x, 24x) alongside automatic maximum speed handling and media-specific sweet spot recommendations.
 14. **Pre-Burn Verify Time Estimation & Persistent Session ETA:** Pre-calculates verification time at 0% based on realistic optical read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead. The session total duration is established once at launch and persists across both burning and verification for a smooth, non-jittering countdown.
-15. **Fast Disc Check Guard & Integrated Verification:** Prior to verification, an asynchronous background check verifies that the freshly burned disc mounts and its root entries are readable within 15 seconds. If bad burns or damaged volume descriptors prevent mounting, the session aborts cleanly without freezing the interface. Once confirmed, it scans for checksum manifests (`.hash`, `.b3`, `.blake3`, `.sha256`, `.sha512`, `.xxh3`, `.md5`, `.sfv`, etc.) and launches **KryptDist** (`KryptDist.py`) to execute bit-level cryptographic verification.
+15. **Primary Checksum Guard & Verification:** When verification is enabled, KryoDisk checks the disc root (depth 0) and immediate top-level folders (depth 1) for a primary checksum manifest (`.hash`, `.b3`, `.sha256`, etc.) prior to burning, prompting to disable verification or cancel if missing. Post-burn, an asynchronous 15-second mount check guards against bad burns before scanning root and depth-1 folders for the primary container to launch **KryptDist** (`KryptDist.py`) for bit-level cryptographic verification without false-positive deep recursion.
 16. **Operation Log Duration Summary:** Completed sessions conclude with an audit log summary reporting the grand total elapsed time alongside the exact burn duration and verification duration breakdown.
-17. **Engines & Preferences Configuration:** Centralized **Tools > Preferences** dialog to auto-detect or manually set custom executable paths for CDBurnerXP CLI, ImgBurn, and KryptDist, as well as notification sound toggles.
+17. **Engines & Preferences Organization:** Centralized **Tools > Preferences** dialog partitioned into **Engines** (custom executable/script path discovery and auto-detection for CDBurnerXP, ImgBurn, and KryptDist) and **Notifications** (customizable spoken audio voice announcers and event toggles).
 18. **Developer Debug & Quick Erase:** When launched with `-DevDebug`, unlocks the Quick Erase tool (🧹) powered by CDBurnerXP CLI and Windows IMAPI2 multi-descriptor zeroing to blank test rewritable media (BD-RE, DVD-RW, CD-RW), enables verbose console telemetry, and maintains independent session preferences.
 19. **Fast Startup Bypass:** Supports `-NoDriveScan` (or `-NoScan` / `-SkipDriveScan`) with `-DevDebug` to bypass the initial 5-second optical hardware query and media spin-up on startup for instantaneous application launch.
-20. **Themed UI & Notification Preferences:** Full support for Dark, Light, and System-synced palettes, paired with options to mute completion audio chimes while preserving visual status badges.
+20. **Spoken Voice Notifications & Themed UI:** Full support for Dark, Light, and System-synced palettes, paired with Kokoro TTS spoken audio announcements (**River** [USA female] and **Lily** [GB female]) for individual completion and failure events, with a master mute toggle that grays out inactive controls.
 21. **Persistent State Management:** Remembers window geometry, write speed preferences, disc labels, verification settings, custom engine paths, and theme configurations across sessions.
 
 ---
@@ -43,7 +43,7 @@ Key operational features include:
 | Option / Feature | Description |
 | :--- | :--- |
 | **Dual Burning Engines** | Select between CDBurnerXP CLI (`cdbxpcmd.exe`) and ImgBurn (long paths) (`ImgBurn.exe`) backends. |
-| **UDF 2.50 & 2.60 Mastering** | Builds compliant Universal Disk Format virtual file systems for universal high-capacity optical compatibility. |
+| **UDF 2.50 & 2.60 Mastering** | Builds compliant Universal Disk Format virtual file systems; ImgBurn mode authors strictly pure UDF (ISO9660 disabled). |
 | **BDXL & Multi-Format Support** | Complete support for CD-R, DVD±R, Blu-ray, and multi-layer BDXL media up to 128GB Quad-Layer (QL). |
 | **Dual-Pane Layout Browser** | Split hierarchical browser for organizing virtual disc directories and staged payloads. |
 | **Live Path Length Validator** | Real-time monitoring of active engine path limits (Win32 260/248 for CDBurnerXP; UDF 2.50 127 char name / 511 char path for ImgBurn). |
@@ -56,15 +56,16 @@ Key operational features include:
 | **Hardware Speed Descriptors** | Queries drive firmware for supported disc write multipliers with recommended presets. |
 | **Pre-Burn Verify Estimation** | Models physical optical throughput, seek latencies, and remount overhead for accurate pre-burn ETAs. |
 | **Persistent Session Countdown**| Establishes a 0% baseline session estimate that persists jitter-free across both burn and verify phases. |
+| **Primary Checksum Guard** | Validates presence of a primary `.hash` at disc root or depth-1 folders before burning; prevents false matches on nested files. |
 | **Fast Disc Check Guard** | Asynchronous 15s background mount check catches bad burns and unreadable media without UI lockups. |
-| **KryptDist Post-Burn Check** | Scans burned discs for `.hash` containers and verifies 100% data integrity post-burn. |
+| **KryptDist Post-Burn Check** | Scans burned discs for the primary checksum manifest and verifies 100% bit-level data integrity post-burn. |
 | **Total Elapsed Time Reporting**| Logs a complete elapsed duration summary (total time, burn time, verify time) at the close of every session. |
-| **Instant Rewritable Overwrites**| Zeroes UDF primary descriptors in sub-seconds in DevDebug mode so rewritable media overwrites without manual erasing. |
-| **Preferences & Engine Paths** | Configure and auto-detect paths for CDBurnerXP, ImgBurn, and KryptDist under **Tools > Preferences**. |
+| **Erase & Burn Disc (DevDebug)** | Evaluates rewritable media by total physical erased size; dynamic action button overwrites data seamlessly. |
+| **Preferences & Engine Paths** | Configure and auto-detect paths for CDBurnerXP, ImgBurn, and KryptDist under **Tools > Preferences > Engines**. |
+| **Voice Audio Notifications** | Spoken voice announcements powered by Kokoro TTS (River & Lily) with individual event checkboxes and gray-out mute styling. |
 | **Quick Erase (🧹) [DevDebug]** | Rapidly blanks volume descriptors on rewritable media (BD-RE, DVD-RW, CD-RW) via CDBurnerXP CLI. |
 | **Instant Launch Flag** | Run with `-DevDebug -NoDriveScan` to bypass startup drive queries for instant launch. |
 | **Theme Engine** | Full support for Dark, Light, and System-synced palettes via custom `QPalette` implementation. |
-| **Sound Suppression Option** | Mutes completion and alert notification sounds while retaining visual status dialogs. |
 
 ---
 
@@ -80,12 +81,12 @@ Key operational features include:
 ## Post-Burn Verification Integration
 
 KryoDisk Burner 120K seamlessly pairs with **KryptDist** (`KryptDist.py`) for end-to-end data integrity validation:
-1. Place a `.hash` manifest (or any supported checksum file: `.b3`, `.sha256`, `.sha512`, `.xxh3`, etc.) inside your staging payload.
-2. Ensure `Verify Disc After Burn with KryptDist` is checked.
+1. Place a primary `.hash` manifest (or any supported checksum file: `.b3`, `.sha256`, `.sha512`, `.xxh3`, etc.) directly at the disc root or inside the primary top-level folder (depth 1, e.g. `\BD-0025\BD-0025.hash`).
+2. Ensure `Verify Disc After Burn with KryptDist` is checked. When clicking Burn, KryoDisk automatically validates the presence of the primary checksum file; if missing, it prompts to disable verification and burn, or cancel to stage the container.
 3. Upon burn completion, KryoDisk Burner executes an asynchronous 15-second filesystem mount probe in the background to ensure media readability and prevent UI lockups on corrupt volume descriptors or bad burns.
-4. Once verified accessible, KryoDisk Burner detects the manifest on the optical disc and invokes `KryptDist.py` headlessly via a dedicated UTF-8 stream to verify every file bit-by-bit, with full real-time progress tracking across Japanese (Kanji, Hiragana, Katakana) and Unicode paths.
+4. Once confirmed accessible, KryoDisk Burner inspects the disc root and immediate top-level folders for the primary manifest (avoiding accidental matches on deep internal test hashes) and invokes `KryptDist.py` headlessly via a dedicated UTF-8 stream to verify every file bit-by-bit, with full real-time progress tracking across Japanese (Kanji, Hiragana, Katakana) and Unicode paths.
 5. If `Eject Disc When Complete` is checked, disc ejection is safely deferred until verification passes with 100% integrity.
-6. Displays a confirmation dialog upon verification success or failure with full audit logging.
+6. Plays the configured Kokoro TTS spoken audio announcement (`burn_completed_and_verified` or `verify_failed`) and displays an alert dialog with full audit logging.
 
 ---
 
@@ -110,6 +111,14 @@ This software is released under the **GNU General Public License v3**.
     * **License:** <a href="https://creativecommons.org/publicdomain/zero/1.0/" target="_blank">CC0 License</a>
     * **Modifications:** Modified by pwshAgyjkcrg761.
 
+
+
+### Audio Notification Credits
+* **Engine:** <a href="https://huggingface.co/spaces/hexgrad/Kokoro-TTS" target="_blank">Kokoro TTS</a>
+    * **Asset:** Voice audio notifications (`burn_completed`, `burn_completed_and_verified`, `burn_failed`, `verify_failed`)
+    * **Voices:** River (USA female) and Lily (Great Britain female)
+    * **License:** <a href="https://creativecommons.org/publicdomain/zero/1.0/" target="_blank">CC0 License</a>
+
 ---
 
 ## Dependencies
@@ -130,4 +139,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.09.28__18.00.26*
+> *2026.09.29__16.22.25*
