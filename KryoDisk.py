@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.28__18.00.26
+# VERSION: 2026.09.29__16.22.25
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.28__18.00.26"
+APP_VERSION = "2026.09.29__16.22.25"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -722,16 +722,7 @@ class PreferencesDialog(QDialog):
 
         self.tabs = QTabWidget(self)
 
-        # Tab 1: Options
-        tab_options = QWidget()
-        opt_layout = QVBoxLayout(tab_options)
-        self.chk_disable_sound = QCheckBox("Disable Notification Sounds")
-        self.chk_disable_sound.setToolTip("Mutes all audio chimes and notification sounds for completion alerts.")
-        opt_layout.addWidget(self.chk_disable_sound)
-        opt_layout.addStretch()
-        self.tabs.addTab(tab_options, "Options")
-
-        # Tab 2: Engines
+        # Tab 1: Engines
         tab_engines = QWidget()
         eng_layout = QVBoxLayout(tab_engines)
 
@@ -787,6 +778,51 @@ class PreferencesDialog(QDialog):
         eng_layout.addStretch()
         self.tabs.addTab(tab_engines, "Engines")
 
+        # Tab 2: Notifications
+        tab_notifications = QWidget()
+        notif_layout = QVBoxLayout(tab_notifications)
+
+        self.chk_disable_sound = QCheckBox("Disable Notification Sounds")
+        self.chk_disable_sound.setToolTip("Mutes all voice chimes and audio notifications.")
+        notif_layout.addWidget(self.chk_disable_sound)
+
+        notif_layout.addSpacing(6)
+
+        # Voice selection dropdown
+        voice_row = QHBoxLayout()
+        self.lbl_voice = QLabel("Voice:")
+        self.lbl_voice.setFixedWidth(50)
+        self.combo_voice = QComboBox()
+        self.combo_voice.addItems(["River (USA female)", "Lily (Great Britain female)"])
+        self.combo_voice.setToolTip("Select voice for spoken audio notifications.")
+        voice_row.addWidget(self.lbl_voice)
+        voice_row.addWidget(self.combo_voice, 1)
+        notif_layout.addLayout(voice_row)
+
+        notif_layout.addSpacing(6)
+
+        self.lbl_events = QLabel("<b>Notification Events:</b>")
+        notif_layout.addWidget(self.lbl_events)
+
+        self.chk_sound_burn_completed = QCheckBox("Burn Completed")
+        self.chk_sound_burn_completed.setChecked(True)
+        self.chk_sound_burn_verified = QCheckBox("Burn Completed && Verified")
+        self.chk_sound_burn_verified.setChecked(True)
+        self.chk_sound_burn_failed = QCheckBox("Burn Failed")
+        self.chk_sound_burn_failed.setChecked(True)
+        self.chk_sound_verify_failed = QCheckBox("Verify Failed")
+        self.chk_sound_verify_failed.setChecked(True)
+
+        notif_layout.addWidget(self.chk_sound_burn_completed)
+        notif_layout.addWidget(self.chk_sound_burn_verified)
+        notif_layout.addWidget(self.chk_sound_burn_failed)
+        notif_layout.addWidget(self.chk_sound_verify_failed)
+
+        self.chk_disable_sound.toggled.connect(self.on_disable_sound_toggled)
+
+        notif_layout.addStretch()
+        self.tabs.addTab(tab_notifications, "Notifications")
+
         main_layout.addWidget(self.tabs)
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -795,6 +831,26 @@ class PreferencesDialog(QDialog):
         main_layout.addWidget(button_box)
 
         self.load_values()
+
+    def on_disable_sound_toggled(self, checked):
+        enabled = not checked
+        dim_style = "color: #777777;" if checked else ""
+        widgets = [
+            getattr(self, 'lbl_voice', None),
+            self.combo_voice,
+            getattr(self, 'lbl_events', None),
+            self.chk_sound_burn_completed,
+            self.chk_sound_burn_verified,
+            self.chk_sound_burn_failed,
+            self.chk_sound_verify_failed
+        ]
+        for w in widgets:
+            if w:
+                w.setEnabled(enabled)
+                w.setStyleSheet(dim_style)
+        self.chk_sound_burn_verified.setEnabled(enabled)
+        self.chk_sound_burn_failed.setEnabled(enabled)
+        self.chk_sound_verify_failed.setEnabled(enabled)
 
     def browse_cdbxp(self):
         curr = self.txt_cdbxp_path.text().strip() or os.getcwd()
@@ -850,7 +906,19 @@ class PreferencesDialog(QDialog):
     def load_values(self):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
-            self.chk_disable_sound.setChecked(s.value("disable_notification_sounds", False))
+            is_muted = s.value("disable_notification_sounds", False)
+            self.chk_disable_sound.setChecked(is_muted)
+            self.on_disable_sound_toggled(is_muted)
+
+            saved_voice = s.value("notification_voice", "River (USA female)")
+            idx_v = self.combo_voice.findText(saved_voice)
+            if idx_v >= 0:
+                self.combo_voice.setCurrentIndex(idx_v)
+
+            self.chk_sound_burn_completed.setChecked(s.value("sound_burn_completed", True))
+            self.chk_sound_burn_verified.setChecked(s.value("sound_burn_verified", True))
+            self.chk_sound_burn_failed.setChecked(s.value("sound_burn_failed", True))
+            self.chk_sound_verify_failed.setChecked(s.value("sound_verify_failed", True))
 
             saved_cdbxp = s.value("custom_cdbxpcmd_path", "")
             if saved_cdbxp and os.path.isfile(saved_cdbxp):
@@ -880,6 +948,11 @@ class PreferencesDialog(QDialog):
         if self.parent_app and hasattr(self.parent_app, 'settings'):
             s = self.parent_app.settings
             s.setValue("disable_notification_sounds", self.chk_disable_sound.isChecked())
+            s.setValue("notification_voice", self.combo_voice.currentText())
+            s.setValue("sound_burn_completed", self.chk_sound_burn_completed.isChecked())
+            s.setValue("sound_burn_verified", self.chk_sound_burn_verified.isChecked())
+            s.setValue("sound_burn_failed", self.chk_sound_burn_failed.isChecked())
+            s.setValue("sound_verify_failed", self.chk_sound_verify_failed.isChecked())
 
             cdbxp_val = self.txt_cdbxp_path.text().strip()
             s.setValue("custom_cdbxpcmd_path", cdbxp_val if os.path.isfile(cdbxp_val) else "")
@@ -1184,7 +1257,7 @@ class OpticalBurnWorker(QThread):
 
             if not has_custom_hierarchy:
                 # Direct on-the-fly streaming: map source paths straight to ImgBurn without copying
-                with open(srclist_path, 'w', encoding='utf-8') as sf:
+                with open(srclist_path, 'w', encoding='utf-8-sig') as sf:
                     for _, clean_p, _ in staged_entries:
                         sf.write(f"{clean_p}\n")
                         self.log(f"Direct source mapping: {clean_p}")
@@ -1226,7 +1299,7 @@ class OpticalBurnWorker(QThread):
                                     pass
                         self.log(f"Staged hardlinked file: {clean_rel} -> {clean_p}")
 
-                with open(srclist_path, 'w', encoding='utf-8') as sf:
+                with open(srclist_path, 'w', encoding='utf-8-sig') as sf:
                     for entry in sorted(os.listdir(layout_dir), key=natural_sort_key):
                         sf.write(f"{os.path.join(layout_dir, entry)}\n")
 
@@ -1254,7 +1327,7 @@ class OpticalBurnWorker(QThread):
                 "/BUILDOUTPUTMODE", "DEVICE",
                 "/SRCLIST", srclist_path,
                 "/DEST", target_dest,
-                "/FILESYSTEM", "3",                     # UDF only
+                "/FILESYSTEM", "UDF",                   # UDF only (disables ISO9660)
                 "/UDFREVISION", str(self.udf_revision),  # "2.50" or "2.60"
                 "/VOLUMELABEL_UDF", self.volume_label[:32],
                 "/SPEED", clean_speed,
@@ -1286,6 +1359,8 @@ class OpticalBurnWorker(QThread):
                 startupinfo=startupinfo,
                 creationflags=creationflags
             )
+
+            logged_dialog_hwnds = set()
 
             def _poll_and_hide_imgburn(target_pid):
                 if sys.platform != "win32":
@@ -1336,6 +1411,7 @@ class OpticalBurnWorker(QThread):
                                 
                                 # Gather all text from static labels and buttons in this dialog
                                 dialog_texts = []
+                                raw_texts = []
                                 btn_yes = None
                                 btn_no = None
                                 btn_ok = None
@@ -1344,6 +1420,7 @@ class OpticalBurnWorker(QThread):
                                     user32.GetWindowTextW(ch, ch_txt_buf, 512)
                                     val = ch_txt_buf.value.strip()
                                     if val:
+                                        raw_texts.append(val)
                                         dialog_texts.append(val.lower())
                                     ctrl_id = user32.GetDlgCtrlID(ch)
                                     if ctrl_id == IDYES or val.lower() == "&yes" or val.lower() == "yes":
@@ -1355,8 +1432,23 @@ class OpticalBurnWorker(QThread):
 
                                 combined_txt = " ".join(dialog_texts)
 
+                                # Only log standalone popup dialogs (filter out internal child tab controls)
+                                style = user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
+                                is_child = bool(style & 0x40000000)       # WS_CHILD
+                                is_tab_panel = "bootable disc" in combined_txt or "folder/file dates" in combined_txt
+
+                                if not is_child and not is_tab_panel:
+                                    if hwnd not in logged_dialog_hwnds:
+                                        logged_dialog_hwnds.add(hwnd)
+                                        raw_summary = " | ".join(raw_texts)
+                                        if raw_summary:
+                                            self.log(f"[ImgBurn Dialog] {t_text or 'Dialog'}: {raw_summary}")
+
                                 # 1. "This disc is not empty... All data on the disc will be overwritten!" -> Click YES
                                 if "not empty" in combined_txt or "overwritten" in combined_txt:
+                                    if not getattr(self, '_logged_overwrite_prompt', False):
+                                        self._logged_overwrite_prompt = True
+                                        self.log("[ImgBurn Action] Overwrite prompt detected -> Automatically answered YES")
                                     target_btn = btn_yes or user32.GetDlgItem(hwnd, IDYES)
                                     if target_btn:
                                         user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
@@ -1459,6 +1551,20 @@ class OpticalBurnWorker(QThread):
                 time.sleep(0.4)
 
             ret = self._proc.returncode
+            # Flush any unread lines from the ImgBurn session log
+            if os.path.exists(log_path):
+                try:
+                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as lf:
+                        lf.seek(last_pos)
+                        remaining_text = lf.read()
+                        if remaining_text:
+                            for line in remaining_text.splitlines():
+                                line_s = line.strip()
+                                if line_s:
+                                    self.log(f"[ImgBurn] {line_s}")
+                except Exception:
+                    pass
+
             if ret == 0:
                 elapsed_total = int(time.time() - start_time)
                 mins, secs = divmod(elapsed_total, 60)
@@ -1467,8 +1573,21 @@ class OpticalBurnWorker(QThread):
                 self.progress_update.emit(100, 100, "Completed", elapsed_total, 0, est_v)
                 self.burn_finished.emit(True, target_dest, "")
             else:
+                # Extract error details directly from the session log to pinpoint early failures
+                error_details = []
+                if os.path.exists(log_path):
+                    try:
+                        with open(log_path, 'r', encoding='utf-8', errors='ignore') as lf:
+                            for line in lf:
+                                l_str = line.strip()
+                                if re.search(r'\b(error|failed|invalid|cannot|unable)\b', l_str, re.IGNORECASE) or l_str.startswith("[E]") or l_str.startswith("E "):
+                                    error_details.append(l_str)
+                    except Exception:
+                        pass
+
+                err_summary = "\n".join(error_details[-6:]) if error_details else f"ImgBurn exited with error code {ret}."
                 self.log(f"ImgBurn exited with error code {ret}.")
-                self.burn_finished.emit(False, target_dest, f"ImgBurn exited with error code {ret}.")
+                self.burn_finished.emit(False, target_dest, err_summary)
 
         except Exception as e:
             self.log(f"Burn process error: {e}")
@@ -1687,13 +1806,37 @@ class DiscMountProbeWorker(QThread):
                     time.sleep(0.5)
 
                 if result_data["found_root"] and not self._is_cancelled:
-                    for root_dir, _, files in os.walk(target_root):
-                        if self._is_cancelled:
-                            break
-                        for f in files:
-                            if f.lower().endswith(CHECKSUM_EXTS):
-                                result_data["hash_file"] = os.path.join(root_dir, f)
+                    # 1. Disc Root (depth 0)
+                    try:
+                        for entry in sorted(os.listdir(target_root), key=natural_sort_key):
+                            if self._is_cancelled:
+                                break
+                            full_path = os.path.join(target_root, entry)
+                            if os.path.isfile(full_path) and entry.lower().endswith(CHECKSUM_EXTS):
+                                result_data["hash_file"] = full_path
                                 return
+                    except Exception:
+                        pass
+
+                    # 2. Immediate top-level folders (depth 1)
+                    try:
+                        for entry in sorted(os.listdir(target_root), key=natural_sort_key):
+                            if self._is_cancelled:
+                                break
+                            sub_dir = os.path.join(target_root, entry)
+                            if os.path.isdir(sub_dir):
+                                try:
+                                    for sub_entry in sorted(os.listdir(sub_dir), key=natural_sort_key):
+                                        if self._is_cancelled:
+                                            break
+                                        sub_file = os.path.join(sub_dir, sub_entry)
+                                        if os.path.isfile(sub_file) and sub_entry.lower().endswith(CHECKSUM_EXTS):
+                                            result_data["hash_file"] = sub_file
+                                            return
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
             except Exception as e:
                 result_data["err"] = str(e)
 
@@ -3095,6 +3238,8 @@ class KryoDiskBurnerApp(QMainWindow):
         
         lbl_fs = QLabel("File System:")
         self.combo_udf = QComboBox()
+        self.combo_udf.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo_udf.setMinimumWidth(140)
         self.combo_udf.addItems(["UDF 2.50", "UDF 2.60"])
         self.combo_udf.setToolTip("Select Universal Disk Format revision (UDF 2.50 standard or UDF 2.60)")
         
@@ -3119,6 +3264,8 @@ class KryoDiskBurnerApp(QMainWindow):
 
         lbl_speed = QLabel("Write Speed:")
         self.combo_speed = QComboBox()
+        self.combo_speed.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo_speed.setMinimumWidth(140)
         self.combo_speed.addItems(["Maximum (Auto)", "24x", "16x", "12x", "8x", "6x", "4x", "2x", "1x"])
         self.combo_speed.setToolTip("Select optical disc burning speed")
         
@@ -3129,7 +3276,7 @@ class KryoDiskBurnerApp(QMainWindow):
         burn_opts_layout.addWidget(self.check_verify)
         burn_opts_layout.addWidget(self.check_eject)
         burn_opts_layout.addWidget(self.check_finalize)
-        burn_opts_layout.addSpacing(10)
+        burn_opts_layout.addStretch()
         burn_opts_layout.addWidget(lbl_speed)
         burn_opts_layout.addWidget(self.combo_speed)
         layout.addLayout(burn_opts_layout)
@@ -3169,10 +3316,10 @@ class KryoDiskBurnerApp(QMainWindow):
             lbl_ico_left.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             btn_inner_layout.addWidget(lbl_ico_left)
 
-        lbl_btn_text = QLabel("Burn Disc")
-        lbl_btn_text.setStyleSheet("font-weight: bold; font-size: 13px; background: transparent;")
-        lbl_btn_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        btn_inner_layout.addWidget(lbl_btn_text)
+        self.lbl_btn_text = QLabel("Burn Disc")
+        self.lbl_btn_text.setStyleSheet("font-weight: bold; font-size: 13px; background: transparent;")
+        self.lbl_btn_text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        btn_inner_layout.addWidget(self.lbl_btn_text)
 
         if os.path.exists(btn_icon_path):
             pix_right = QIcon(btn_icon_path).pixmap(18, 18)
@@ -3290,9 +3437,9 @@ class KryoDiskBurnerApp(QMainWindow):
             if media_code in (17, 18, 19) or "BD" in media_name.upper():
                 fs_label = "UDF 2.50 (Forced)"
             elif media_code in (4, 5, 6, 7, 8, 9, 10, 11, 13) or "DVD" in media_name.upper():
-                fs_label = "ISO/UDF Bridge 1.02 (Forced)"
+                fs_label = "UDF 1.02 (Forced)"
             elif media_code in (1, 2, 3) or "CD" in media_name.upper():
-                fs_label = "UDF Engine Default (Forced)"
+                fs_label = "UDF 1.02 (Forced)"
             else:
                 fs_label = "UDF (Forced)"
 
@@ -3379,13 +3526,13 @@ class KryoDiskBurnerApp(QMainWindow):
 
         total_cap = self.current_media_info.get("total_capacity_bytes", 0)
         if is_rewritable:
-            usable_cap = free_bytes if free_bytes > 0 else total_cap
+            usable_cap = total_cap if (DEV_DEBUG and total_cap > 0) else (free_bytes if free_bytes > 0 else total_cap)
             self.current_media_info["free_capacity_bytes"] = usable_cap
             if is_blank:
                 status_text = f"Disc: {media_name} [Testing Media: Blank] | Usable Capacity: {format_byte_size(usable_cap)}{rec_str}"
                 self.lbl_disc_info.setStyleSheet("color: #28a745; font-weight: bold; padding: 2px 0px;")
             else:
-                status_text = f"Disc: {media_name} [Testing Media] | Usable Capacity: {format_byte_size(usable_cap)} (Existing data will be overwritten)"
+                status_text = f"Disc: {media_name} [Testing Media] | Erased Capacity: {format_byte_size(usable_cap)} (Existing data will be overwritten)"
                 self.lbl_disc_info.setStyleSheet("color: #e06c00; font-weight: bold; padding: 2px 0px;")
         elif free_bytes > 0:
             status_text = f"Disc: {media_name} ({'Blank' if is_blank else 'Appendable'}) | Free Capacity: {format_byte_size(free_bytes)}{rec_str}"
@@ -3500,6 +3647,18 @@ class KryoDiskBurnerApp(QMainWindow):
         else:
             self.capacity_bar.setValue(0)
             self.lbl_capacity.setText(f"Payload: <b>{format_byte_size(total_bytes)}</b> (Insert media to gauge capacity)")
+
+        if hasattr(self, 'lbl_btn_text'):
+            media_info = getattr(self, 'current_media_info', {})
+            media_code = media_info.get("media_type_code", 0)
+            media_name = media_info.get("media_type_name", "")
+            is_rw = media_code in (3, 5, 7, 10, 13, 16, 19) or any(x in media_name.upper() for x in ("-RE", "REWRITABLE", "-RW", "+RW", "RAM"))
+            is_blank = media_info.get("is_blank", False)
+
+            if DEV_DEBUG and is_rw and not is_blank and free_cap > 0 and 0 < total_bytes <= free_cap:
+                self.lbl_btn_text.setText("Erase & Burn Disc")
+            else:
+                self.lbl_btn_text.setText("Burn Disc")
 
     
 
@@ -3761,14 +3920,15 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<h2>OVERVIEW</h2>"
             f"<p><b>KryoDisk Burner 120K</b> is a high-performance optical disc authoring and burning application for Windows. "
             f"It features dual burning engine support utilizing <b>CDBurnerXP CLI (cdbxpcmd.exe)</b> for headless operation and "
-            f"<b>ImgBurn / ImgBurnPortable</b> to author compliant <b>Universal Disk Format (UDF 2.50 / UDF 2.60)</b> file systems "
+            f"<b>ImgBurn / ImgBurnPortable</b> to author pure, compliant <b>Universal Disk Format (UDF 2.50 / UDF 2.60)</b> file systems "
             f"across CD, DVD, Blu-ray (BD-R/RE), and high-capacity BDXL media (up to 128GB Quad-Layer).</p>"
             f"<h2>BURNING ENGINES &amp; PREFERENCES</h2>"
             f"<ul>"
             f"<li><b>CDBurnerXP CLI (Default):</b> True headless CLI burning engine that formats and burns data discs with live track progress and volume management.</li>"
-            f"<li><b>ImgBurn (long paths):</b> Advanced optical authoring engine supporting customizable UDF 2.50 and UDF 2.60 revisions, powered by instant NTFS virtual layout staging and native support for long file paths.</li>"
+            f"<li><b>ImgBurn (long paths):</b> Advanced optical authoring engine supporting customizable UDF 2.50 and UDF 2.60 revisions, powered by instant NTFS virtual layout staging and native support for long file paths. All burns are authored strictly as pure UDF (ISO9660 disabled) to eliminate legacy file size and naming restrictions.</li>"
             f"<li><b>KryptDist Verifier (KryptDist.py):</b> Integrated cryptographic verification engine for post-burn data validation.</li>"
-            f"<li><b>Preferences (Tools -&gt; Preferences):</b> Configure custom executable/script paths or click <b>Auto-Detect</b> for CDBurnerXP, ImgBurn, and KryptDist, as well as notification sound toggles.</li>"
+            f"<li><b>Preferences (Tools -&gt; Preferences):</b> Divided into two tabs: <b>Engines</b> (configure custom executable/script paths or auto-detect) and <b>Notifications</b> (configure spoken audio alerts, voices, and individual event toggles).</li>"
+            f"<li><b>Voice Notifications:</b> Spoken audio alerts powered by Kokoro TTS with customizable voices (<b>River</b> [USA female] and <b>Lily</b> [GB female]) for Burn Completed, Burn Completed &amp; Verified, Burn Failed, and Verify Failed. Checking <i>Disable Notification Sounds</i> mutes all alerts and grays out inactive options.</li>"
             f"<li><b>GUI Themes:</b> Switch between <b>Dark</b>, <b>Light</b>, or <b>System</b> theme under <b>Tools -&gt; Themes</b>.</li>"
             f"</ul>"
             f"<h2>DISC STAGING &amp; LAYOUT</h2>"
@@ -3776,31 +3936,33 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Create virtual folders, add custom directories, and remove individual files from staged folders freely.</li>"
             f"<li><b>Adding Data:</b> Use the <b>➕ Add Files &amp; Folders</b> dual-explorer dialog, send items via Windows <b>SendTo</b>, or pass paths on startup.</li>"
             f"<li><b>Path Length Validation:</b> Dynamically monitors staged paths based on active engine: enforces Win32 limits (260 chars for files, 248 chars for directories) when CDBurnerXP is active, or UDF 2.50 specifications (max 127 chars per file/folder name, max 511 chars cumulative path length) when ImgBurn (long paths) is active.</li>"
-            f"<li><b>Session Finalization:</b> Discs are always closed and finalized on burn completion to guarantee broad optical drive compatibility and long-term archival data integrity.</li>"
+            f"<li><b>Session Finalization:</b> Discs are closed and finalized on burn completion to guarantee broad optical drive compatibility and long-term archival data integrity.</li>"
             f"<li><b>Volume Label:</b> Specify a custom disc label (up to 32 characters in accordance with UDF standards).</li>"
-            f"<li><b>Unicode &amp; International Characters:</b> Full end-to-end UTF-8 / Unicode support across staged layouts, disc authoring, and post-burn verification (including Japanese [Kanji, Hiragana, Katakana], CJK, Cyrillic, accents, and symbols).</li>"
-            f"<li><b>Capacity Gauging:</b> Real-time capacity bar dynamically compares staged payloads against free disc media space with overload warnings.</li>"
+            f"<li><b>Unicode &amp; International Characters:</b> Full end-to-end UTF-8 / Unicode support across staged layouts, UTF-8 BOM source lists, disc authoring, and post-burn verification (including Japanese [Kanji, Hiragana, Katakana], CJK, Cyrillic, accents, and symbols).</li>"
+            f"<li><b>Capacity Gauging:</b> Real-time capacity bar dynamically compares staged payloads against available disc capacity with overload warnings.</li>"
             f"</ul>"
             f"<h2>HARDWARE &amp; MEDIA SUPPORT</h2>"
             f"<ul>"
             f"<li><b>Supported Media:</b> Write-once optical media including CD-R, DVD±R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL).</li>"
-            f"<li><b>Rewritable Media Policy:</b> Rewritable media (BD-RE, CD-RW, DVD±RW, DVD-RAM) is strictly restricted to <code>-DevDebug</code> mode for development and scratch testing. In DevDebug mode, burns overwrite existing data on rewritable media instantly via sub-second UDF descriptor zeroing without requiring repetitive manual erasures.</li>"
+            f"<li><b>Rewritable Media Policy:</b> Rewritable media (BD-RE, CD-RW, DVD±RW, DVD-RAM) is strictly restricted to <code>-DevDebug</code> mode for development and testing. In DevDebug mode, the capacity gauge evaluates payload against the disc's total erased physical capacity, and the burn button dynamically switches to <b>Erase &amp; Burn Disc</b> to overwrite existing data automatically without requiring manual pre-erasure cycles.</li>"
             f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.) with automatic media recommendations.</li>"
             f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
             f"<li><b>Rewritable Media Quick Erase (<code>🧹</code>):</b> In DevDebug mode, performs a fast single-pass erase utilizing CDBurnerXP CLI, Windows IMAPI2, and dual primary/backup UDF descriptor zeroing.</li>"
             f"</ul>"
-            f"<h2>TIMING ESTIMATES &amp; POST-BURN INTEGRITY VERIFICATION</h2>"
+            f"<h2>PRIMARY CHECKSUM VALIDATION &amp; INTEGRITY VERIFICATION</h2>"
             f"<ul>"
-            f"<li><b>Pre-Burn Verification Time Estimation:</b> When verification is enabled, KryoDisk accurately estimates verify duration prior to launch using physical media read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead.</li>"
+            f"<li><b>Pre-Burn Primary Checksum Guard:</b> When verification is enabled, KryoDisk checks the disc root (depth 0) and immediate top-level folders (depth 1) for a primary checksum manifest (<code>.hash</code>, <code>.b3</code>, <code>.sha256</code>, etc.). If none is found, it prompts the user to either disable verification and proceed with the burn, or cancel to add the container.</li>"
+            f"<li><b>Targeted Mount Probing:</b> Post-burn verification applies the identical Primary Checksum rule, scanning root and depth-1 folders only. This prevents accidental false matches on nested test checksum files.</li>"
+            f"<li><b>Pre-Burn Verification Time Estimation:</b> Accurately estimates verify duration prior to launch using physical media read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead.</li>"
             f"<li><b>Persistent Session Total:</b> Total session estimated duration is locked at launch (0%) and persists across both burning and verification phases for a smooth, jitter-free countdown.</li>"
-            f"<li><b>Fast Disc Check (15s Guard):</b> Prior to verification, an asynchronous background check verifies that the disc filesystem and root entries mount successfully within 15 seconds. If media damage, unreadable volume descriptors, or a bad burn prevents mounting, the session aborts cleanly without freezing the user interface.</li>"
-            f"<li><b>Automated Verification:</b> When <i>Verify Disc After Burn with KryptDist</i> is checked, KryoDisk scans the burned disc for checksum manifests (<code>.hash</code>, <code>.b3</code>, <code>.sha256</code>, <code>.sha512</code>, <code>.xxh3</code>, <code>.md5</code>, <code>.sfv</code>, etc.) and performs 100% cryptographic validation via KryptDist.</li>"
+            f"<li><b>Fast Disc Check (15s Guard):</b> Prior to verification, an asynchronous background check verifies that the disc filesystem and root entries mount successfully within 15 seconds. If media damage or a bad burn prevents mounting, the session aborts cleanly without freezing the UI.</li>"
+            f"<li><b>Automated Verification:</b> Performs 100% cryptographic validation via KryptDist against the primary manifest.</li>"
             f"<li><b>Operation Log Summary:</b> Every completed session concludes with a detailed elapsed time summary breakdown (Total Elapsed Time, Burn Duration, and Verification Duration).</li>"
             f"<li><b>Safe Ejection:</b> If verification is enabled, tray ejection is held until verification completes successfully.</li>"
             f"</ul>"
             f"<h2>COMMAND LINE FLAGS &amp; DEVDEBUG</h2>"
             f"<ul>"
-            f"<li><code>-DevDebug</code> &mdash; Enables verbose console logging, unlocks the Quick Erase (<code>🧹</code>) tool for rewritable media, and maintains independent session finalization preferences.</li>"
+            f"<li><code>-DevDebug</code> &mdash; Enables verbose console logging, unlocks the Quick Erase (<code>🧹</code>) tool for rewritable media, allows total-capacity evaluations on RW discs, and maintains independent session finalization preferences.</li>"
             f"<li><code>-NoDriveScan</code> (or <code>-NoScan</code> / <code>-SkipDriveScan</code>) &mdash; When used with <code>-DevDebug</code>, bypasses the initial 5-second optical drive query and media spin-up on startup for instantaneous launch.</li>"
             f"</ul>"
             f"<h2>ENGINE &amp; SCRIPT DISCOVERY</h2>"
@@ -3834,7 +3996,7 @@ class KryoDiskBurnerApp(QMainWindow):
     def show_about(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("About")
-        dialog.resize(500, 350)
+        dialog.resize(500, 390)
         
         icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
         if os.path.exists(icon_path):
@@ -3864,7 +4026,10 @@ class KryoDiskBurnerApp(QMainWindow):
             "<hr>"
             "<p><b>Icon Credits:</b><br>"
             "'Fire SVG Vector' by <a href=\"https://www.svgrepo.com/author/dstore/\">dstore</a> via <a href=\"https://www.svgrepo.com/svg/506715/fire\">SVGRepo</a>.<br>"
-            "Used under CC0 License. Modified by pwshAgyjkcrg761.</p>"
+            "Used under <a href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0 License</a>. Modified by pwshAgyjkcrg761.</p>"
+            "<p><b>Audio Notification Credits:</b><br>"
+            "Audio notifications generated with <a href=\"https://huggingface.co/spaces/hexgrad/Kokoro-TTS\">Kokoro TTS</a>.<br>"
+            "Used under <a href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0 License</a>.</p>"
         )
         text_browser.setHtml(about_text)
         layout.addWidget(text_browser)
@@ -3876,6 +4041,35 @@ class KryoDiskBurnerApp(QMainWindow):
         dialog.exec()
 
     
+
+    def play_notification_sound(self, event_name):
+        """Plays the configured voice audio notification for completion/failure events asynchronously."""
+        if not hasattr(self, 'settings'):
+            return
+        if self.settings.value("disable_notification_sounds", False):
+            return
+
+        setting_map = {
+            "burn_completed": "sound_burn_completed",
+            "burn_completed_and_verified": "sound_burn_verified",
+            "burn_failed": "sound_burn_failed",
+            "verify_failed": "sound_verify_failed"
+        }
+        config_key = setting_map.get(event_name)
+        if config_key and not self.settings.value(config_key, True):
+            return
+
+        voice = self.settings.value("notification_voice", "River (USA female)")
+        prefix = "huggingface-co_kokoro-tts_gb-lily_" if "lily" in voice.lower() else "huggingface-co_kokoro-tts_us-river_"
+        wav_name = f"{prefix}{event_name}.wav"
+        wav_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "audio-notifications", wav_name))
+
+        if os.path.isfile(wav_path) and sys.platform == "win32":
+            try:
+                import winsound
+                winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            except Exception:
+                pass
 
     def show_alert(self, title, text, icon_type="info", buttons=QMessageBox.StandardButton.Ok, default_button=None):
         """Displays a dialog box with optional sound suppression and consistent window icons."""
@@ -4009,6 +4203,33 @@ class KryoDiskBurnerApp(QMainWindow):
             self.stacked_widget.setCurrentIndex(0)
             self.refresh_drives()
 
+    def find_primary_checksum(self):
+        """Searches disc root (depth 0) and immediate top-level folders (depth 1) for a primary checksum file."""
+        staged_items = self.path_list.get_staged_items()
+        # 1. Disc Root (depth 0)
+        for rel_p, abs_p, is_dir in staged_items:
+            if not is_dir and os.path.isfile(abs_p):
+                parts = [p for p in rel_p.replace('/', '\\').split('\\') if p]
+                if len(parts) == 1 and parts[0].lower().endswith(CHECKSUM_EXTS):
+                    return abs_p
+
+        # 2. Immediate top-level folders (depth 1)
+        for rel_p, abs_p, is_dir in staged_items:
+            parts = [p for p in rel_p.replace('/', '\\').split('\\') if p]
+            if not is_dir and len(parts) == 2 and parts[1].lower().endswith(CHECKSUM_EXTS):
+                if os.path.isfile(abs_p):
+                    return abs_p
+            elif is_dir and len(parts) == 1 and os.path.isdir(abs_p):
+                try:
+                    for entry in os.listdir(abs_p):
+                        if entry.lower().endswith(CHECKSUM_EXTS):
+                            cand = os.path.join(abs_p, entry)
+                            if os.path.isfile(cand):
+                                return cand
+                except Exception:
+                    pass
+        return None
+
     def run_burn(self):
         drive_id = self.combo_drives.currentData()
         if not drive_id:
@@ -4019,6 +4240,25 @@ class KryoDiskBurnerApp(QMainWindow):
         if not targets:
             self.show_alert("No Files", "Please add files or folders to burn to the disc.", icon_type="warning")
             return
+
+        # Check for primary checksum file if post-burn verification is requested
+        if self.check_verify.isChecked():
+            primary_hash = self.find_primary_checksum()
+            if not primary_hash:
+                reply = self.show_alert(
+                    "No Primary Checksum File Found",
+                    "Post-burn verification is enabled, but no primary checksum file (.hash, .b3, .sha256, etc.) "
+                    "was found in the disc root or immediate top-level folders.\n\n"
+                    "Would you like to disable verification and proceed with the burn?\n\n"
+                    "Click 'Yes' to disable verification and burn now, or 'Cancel' to add a checksum file.",
+                    icon_type="question",
+                    buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    default_button=QMessageBox.StandardButton.Cancel
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.check_verify.setChecked(False)
+                else:
+                    return
 
         # Check for path / filename length limit violations
         max_len, violations = self.path_list.get_all_path_violations()
@@ -4075,11 +4315,17 @@ class KryoDiskBurnerApp(QMainWindow):
             )
             return
 
-        effective_cap = free_bytes if free_bytes > 0 else media_info.get("total_capacity_bytes", 0)
+        total_physical_cap = media_info.get("total_capacity_bytes", 0)
+        if is_rewritable and DEV_DEBUG:
+            effective_cap = total_physical_cap if total_physical_cap > 0 else free_bytes
+        else:
+            effective_cap = free_bytes if free_bytes > 0 else total_physical_cap
+
         if effective_cap > 0 and total_bytes > effective_cap:
+            cap_desc = "total erased capacity" if (is_rewritable and DEV_DEBUG) else "available capacity"
             self.show_alert(
                 "Capacity Exceeded",
-                f"The staged payload ({format_byte_size(total_bytes)}) exceeds the available capacity "
+                f"The staged payload ({format_byte_size(total_bytes)}) exceeds the {cap_desc} "
                 f"of the disc ({format_byte_size(effective_cap)}).\n\nPlease remove some items before burning.",
                 icon_type="error"
             )
@@ -4444,6 +4690,7 @@ class KryoDiskBurnerApp(QMainWindow):
                 self.append_burn_log("Ejecting disc tray...")
                 self.eject_drive(drive_id)
 
+            self.play_notification_sound("burn_completed_and_verified")
             self.show_alert(
                 "Burn & Verification Complete",
                 f"Disc burn and integrity verification completed successfully!\n\n"
@@ -4455,6 +4702,7 @@ class KryoDiskBurnerApp(QMainWindow):
             self.lbl_burn_status.setText("Status: Verification Failed (Mismatch or Read Error)")
             self.append_burn_log(f"[ERROR] Verification Failed (Exit code {returncode}): Checksum mismatch or corruption detected in '{hash_name}'!")
             self.append_burn_log(summary_str)
+            self.play_notification_sound("verify_failed")
             self.show_alert(
                 "Verification Failed",
                 f"Burn completed, but post-burn integrity verification failed!\n\n"
@@ -4471,6 +4719,7 @@ class KryoDiskBurnerApp(QMainWindow):
             self.append_burn_log(f"[ERROR] Fast disc check failed on {drive_letter}: {error_msg}")
             mins, secs = divmod(self.burn_duration_sec, 60)
             self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Verification aborted)")
+            self.play_notification_sound("verify_failed")
             self.show_alert(
                 "Disc Check Failed",
                 f"Burn completed, but the disc filesystem could not be loaded within 15 seconds:\n\n"
@@ -4504,6 +4753,7 @@ class KryoDiskBurnerApp(QMainWindow):
             self.append_burn_log("No checksum file found on disc to verify.")
             mins, secs = divmod(self.burn_duration_sec, 60)
             self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn: {mins:02d}:{secs:02d})")
+            self.play_notification_sound("burn_completed")
             self.show_alert(
                 "Burn Complete",
                 "Disc burn completed successfully!\n\n"
@@ -4523,6 +4773,7 @@ class KryoDiskBurnerApp(QMainWindow):
             self.lbl_burn_status.setText("Status: Burn failed.")
             mins, secs = divmod(self.burn_duration_sec, 60)
             self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn failed)")
+            self.play_notification_sound("burn_failed")
             self.show_alert("Burn Failed", f"Optical disc burn failed:\n\n{error_msg}", icon_type="error")
             self.refresh_drives()
             return
@@ -4537,6 +4788,7 @@ class KryoDiskBurnerApp(QMainWindow):
                 self.append_burn_log("Warning: KryptDist.py not found. Verification skipped.")
                 mins, secs = divmod(self.burn_duration_sec, 60)
                 self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn: {mins:02d}:{secs:02d})")
+                self.play_notification_sound("burn_completed")
                 self.show_alert(
                     "Burn Complete",
                     f"Disc burn completed successfully!\n\n"
@@ -4562,6 +4814,7 @@ class KryoDiskBurnerApp(QMainWindow):
             self.append_burn_log("Disc burn completed successfully.")
             mins, secs = divmod(self.burn_duration_sec, 60)
             self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn: {mins:02d}:{secs:02d})")
+            self.play_notification_sound("burn_completed")
             self.show_alert(
                 "Burn Complete",
                 "Disc burn completed successfully!",
