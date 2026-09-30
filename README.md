@@ -28,7 +28,7 @@ Key operational features include:
 12. **Hardware Tray Eject & Motorized Close:** Direct hardware controls to eject (⏏) and close/load (📥) optical drive trays via kernel IOCTL and MCI interfaces.
 13. **Dynamic Write Speed Configuration:** Queries drive firmware to expose valid write speed multipliers (e.g. 1x, 2x, 4x, 8x, 16x, 24x) alongside automatic maximum speed handling and media-specific sweet spot recommendations.
 14. **Pre-Burn Verify Time Estimation & Persistent Session ETA:** Pre-calculates verification time at 0% based on realistic optical read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead. The session total duration is established once at launch and persists across both burning and verification for a smooth, non-jittering countdown.
-15. **Primary Checksum Guard & Verification:** When verification is enabled, KryoDisk checks the disc root (depth 0) and immediate top-level folders (depth 1) for a primary checksum manifest (`.hash`, `.b3`, `.sha256`, etc.) prior to burning, prompting to disable verification or cancel if missing. Post-burn, an asynchronous 15-second mount check guards against bad burns before scanning root and depth-1 folders for the primary container to launch **KryptDist** (`KryptDist.py`) for bit-level cryptographic verification without false-positive deep recursion.
+15. **Primary Checksum Guard & Verification:** When verification is enabled, KryoDisk checks the disc root (depth 0) and immediate top-level folders (depth 1) for a primary checksum manifest (`.hash`, `.b3`, `.sha256`, etc.) prior to burning, prompting to disable verification or cancel if missing. Post-burn, a 25-second thermal cooldown allows the optical pickup unit and laser diode to stabilize, followed by a software volume dismount (`FSCTL_DISMOUNT_VOLUME`) to flush Windows sector caches without requiring physical tray cycling. An asynchronous 15-second mount probe then guards against corrupt burns before launching **KryptDist** (`KryptDist.py`) to verify data integrity under an active 20-second stall watchdog timer.
 16. **Operation Log Duration Summary:** Completed sessions conclude with an audit log summary reporting the grand total elapsed time alongside the exact burn duration and verification duration breakdown.
 17. **Engines & Preferences Organization:** Centralized **Tools > Preferences** dialog partitioned into **Engines** (custom executable/script path discovery and auto-detection for CDBurnerXP, ImgBurn, and KryptDist) and **Notifications** (customizable spoken audio voice announcers and event toggles).
 18. **Developer Debug & Quick Erase:** When launched with `-DevDebug`, unlocks the Quick Erase tool (🧹) powered by CDBurnerXP CLI and Windows IMAPI2 multi-descriptor zeroing to blank test rewritable media (BD-RE, DVD-RW, CD-RW), enables verbose console telemetry, and maintains independent session preferences.
@@ -57,8 +57,9 @@ Key operational features include:
 | **Pre-Burn Verify Estimation** | Models physical optical throughput, seek latencies, and remount overhead for accurate pre-burn ETAs. |
 | **Persistent Session Countdown**| Establishes a 0% baseline session estimate that persists jitter-free across both burn and verify phases. |
 | **Primary Checksum Guard** | Validates presence of a primary `.hash` at disc root or depth-1 folders before burning; prevents false matches on nested files. |
+| **Thermal Cooldown & Cache Flush** | 25s settling countdown and software volume dismount (`FSCTL_DISMOUNT_VOLUME`) flush OS sector cache without physical tray cycling. |
 | **Fast Disc Check Guard** | Asynchronous 15s background mount check catches bad burns and unreadable media without UI lockups. |
-| **KryptDist Post-Burn Check** | Scans burned discs for the primary checksum manifest and verifies 100% bit-level data integrity post-burn. |
+| **KryptDist Post-Burn Check** | Scans burned discs for primary manifest and verifies 100% bit-level data integrity, guarded by a 20s stall watchdog. |
 | **Total Elapsed Time Reporting**| Logs a complete elapsed duration summary (total time, burn time, verify time) at the close of every session. |
 | **Erase & Burn Disc (DevDebug)** | Evaluates rewritable media by total physical erased size; dynamic action button overwrites data seamlessly. |
 | **Preferences & Engine Paths** | Configure and auto-detect paths for CDBurnerXP, ImgBurn, and KryptDist under **Tools > Preferences > Engines**. |
@@ -83,8 +84,8 @@ Key operational features include:
 KryoDisk Burner 120K seamlessly pairs with **KryptDist** (`KryptDist.py`) for end-to-end data integrity validation:
 1. Place a primary `.hash` manifest (or any supported checksum file: `.b3`, `.sha256`, `.sha512`, `.xxh3`, etc.) directly at the disc root or inside the primary top-level folder (depth 1, e.g. `\BD-0025\BD-0025.hash`).
 2. Ensure `Verify Disc After Burn with KryptDist` is checked. When clicking Burn, KryoDisk automatically validates the presence of the primary checksum file; if missing, it prompts to disable verification and burn, or cancel to stage the container.
-3. Upon burn completion, KryoDisk Burner executes an asynchronous 15-second filesystem mount probe in the background to ensure media readability and prevent UI lockups on corrupt volume descriptors or bad burns.
-4. Once confirmed accessible, KryoDisk Burner inspects the disc root and immediate top-level folders for the primary manifest (avoiding accidental matches on deep internal test hashes) and invokes `KryptDist.py` headlessly via a dedicated UTF-8 stream to verify every file bit-by-bit, with full real-time progress tracking across Japanese (Kanji, Hiragana, Katakana) and Unicode paths.
+3. Upon burn completion, KryoDisk initiates a 25-second thermal cool-down pause to allow the laser diode and optical pickup assembly to stabilize, followed by a software volume dismount (`FSCTL_DISMOUNT_VOLUME`) to flush stale Windows sector caches without requiring physical tray cycling. An asynchronous 15-second filesystem mount probe then checks media readability to guard against bad burns or damaged volume descriptors.
+4. Once confirmed accessible, KryoDisk Burner inspects the disc root and immediate top-level folders for the primary manifest (avoiding accidental matches on deep internal test hashes) and invokes `KryptDist.py` headlessly under an active 20-second stall watchdog timer to verify every file bit-by-bit, with full real-time progress tracking across Japanese (Kanji, Hiragana, Katakana) and Unicode paths while automatically aborting if the drive hangs.
 5. If `Eject Disc When Complete` is checked, disc ejection is safely deferred until verification passes with 100% integrity.
 6. Plays the configured Kokoro TTS spoken audio announcement (`burn_completed_and_verified` or `verify_failed`) and displays an alert dialog with full audit logging.
 
@@ -139,4 +140,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.09.29__16.22.25*
+> *2026.09.29__19.58.49*
