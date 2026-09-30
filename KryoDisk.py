@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.29__16.22.25
+# VERSION: 2026.09.29__19.58.49
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.29__16.22.25"
+APP_VERSION = "2026.09.29__19.58.49"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -1230,7 +1230,7 @@ class OpticalBurnWorker(QThread):
                         break
 
             temp_parent = payload_drive if (payload_drive and os.path.isdir(payload_drive)) else None
-            temp_dir = tempfile.mkdtemp(prefix="KryptDist_temp_", dir=temp_parent)
+            temp_dir = tempfile.mkdtemp(prefix="KryoDisk_temp_", dir=temp_parent)
             srclist_path = os.path.join(temp_dir, "sources.txt")
             log_path = os.path.join(temp_dir, "imgburn_session.log")
 
@@ -1773,17 +1773,63 @@ class DiscMountProbeWorker(QThread):
     log_message = pyqtSignal(str)
     probe_finished = pyqtSignal(bool, str, str)  # success, first_hash_path, error_msg
 
-    def __init__(self, drive_letter, timeout_sec=15):
+    def __init__(self, drive_letter, timeout_sec=15, cooldown_sec=25):
         super().__init__()
         self.drive_letter = drive_letter or ""
         self.timeout_sec = timeout_sec
+        self.cooldown_sec = cooldown_sec
         self._is_cancelled = False
 
     def cancel(self):
         self._is_cancelled = True
 
     def run(self):
-        target_root = self.drive_letter if self.drive_letter.endswith(os.sep) else f"{self.drive_letter}\\"
+        target_dest = self.drive_letter.rstrip('\\')
+        target_root = f"{target_dest}\\" if target_dest else ""
+
+        # 1. Thermal cool-down and drive spin-down countdown
+        self.log_message.emit(f"Starting {self.cooldown_sec}s optical drive cool-down and settling pause...")
+        for remaining in range(self.cooldown_sec, 0, -1):
+            if self._is_cancelled:
+                self.probe_finished.emit(False, "", "Operation cancelled by user.")
+                return
+            self.status_update.emit(f"Status: Drive cooling down & settling ({remaining}s)...")
+            time.sleep(1.0)
+
+        # 2. Software volume dismount to invalidate stale Windows UDF/CDFS sector caches
+        if target_dest and sys.platform == "win32":
+            try:
+                self.log_message.emit(f"Dismounting optical volume on {target_dest} to flush OS sector cache...")
+                FILE_SHARE_READ = 1
+                FILE_SHARE_WRITE = 2
+                OPEN_EXISTING = 3
+                FSCTL_DISMOUNT_VOLUME = 0x00090020
+
+                h_dev = -1
+                for access_flag in (0x80000000 | 0x40000000, 0x80000000, 0):
+                    h_dev = ctypes.windll.kernel32.CreateFileW(
+                        f"\\\\.\\{target_dest}",
+                        access_flag,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        None,
+                        OPEN_EXISTING,
+                        0,
+                        None
+                    )
+                    if h_dev != -1:
+                        break
+
+                if h_dev != -1:
+                    bytes_ret = ctypes.c_ulong(0)
+                    ctypes.windll.kernel32.DeviceIoControl(
+                        h_dev, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None
+                    )
+                    ctypes.windll.kernel32.CloseHandle(h_dev)
+                    self.log_message.emit("Volume cache flushed successfully.")
+            except Exception as d_err:
+                self.log_message.emit(f"Volume dismount note: {d_err}")
+
+        # 3. Probe disc filesystem and locate primary checksum manifest
         self.status_update.emit(f"Status: Probing disc filesystem on {self.drive_letter} (15s timeout)...")
         self.log_message.emit(f"Probing disc mount and filesystem on {self.drive_letter} (15s limit)...")
 
@@ -1951,6 +1997,8 @@ class KryptDistVerifyWorker(QThread):
             last_pct = 0
             last_phase = "Verifying disc..."
             last_file = ""
+            last_activity_time = time.time()
+            stall_timeout_sec = 20.0
 
             while self._proc.poll() is None or not out_queue.empty():
                 if self._is_cancelled:
@@ -1967,6 +2015,8 @@ class KryptDistVerifyWorker(QThread):
                     line_s = line.strip()
                     if not line_s:
                         continue
+
+                    last_activity_time = time.time()
 
                     clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line_s).strip()
                     if "VERIFY_PROGRESS:" in clean_line:
@@ -1997,6 +2047,18 @@ class KryptDistVerifyWorker(QThread):
                                 pass
                     else:
                         self.log_message.emit(f"[KryptDist] {clean_line}")
+
+                if time.time() - last_activity_time > stall_timeout_sec:
+                    self.log_message.emit(
+                        f"[ERROR] Verification stalled: no output from KryptDist for {int(stall_timeout_sec)}s "
+                        f"(stuck on file: '{last_file or 'unknown'}'). Aborting process..."
+                    )
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
+                    self.finished.emit(False, -2, self.hash_path)
+                    return
 
                 cur_elapsed = max(1, int(time.time() - start_time))
                 if last_pct >= 100:
@@ -3955,8 +4017,9 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Targeted Mount Probing:</b> Post-burn verification applies the identical Primary Checksum rule, scanning root and depth-1 folders only. This prevents accidental false matches on nested test checksum files.</li>"
             f"<li><b>Pre-Burn Verification Time Estimation:</b> Accurately estimates verify duration prior to launch using physical media read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead.</li>"
             f"<li><b>Persistent Session Total:</b> Total session estimated duration is locked at launch (0%) and persists across both burning and verification phases for a smooth, jitter-free countdown.</li>"
+            f"<li><b>Thermal Cooldown &amp; Software Cache Flush:</b> Following burn completion, a 25-second cooldown allows the optical pickup unit and laser diode to thermally stabilize, followed by a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>) to force Windows to drop cached sector allocations without requiring physical tray ejection.</li>"
             f"<li><b>Fast Disc Check (15s Guard):</b> Prior to verification, an asynchronous background check verifies that the disc filesystem and root entries mount successfully within 15 seconds. If media damage or a bad burn prevents mounting, the session aborts cleanly without freezing the UI.</li>"
-            f"<li><b>Automated Verification:</b> Performs 100% cryptographic validation via KryptDist against the primary manifest.</li>"
+            f"<li><b>Automated Verification &amp; 20s Stall Watchdog:</b> Performs 100% cryptographic validation via KryptDist against the primary manifest, protected by an active 20-second stall watchdog that automatically terminates frozen reads and reports errors if the optical drive hangs.</li>"
             f"<li><b>Operation Log Summary:</b> Every completed session concludes with a detailed elapsed time summary breakdown (Total Elapsed Time, Burn Duration, and Verification Duration).</li>"
             f"<li><b>Safe Ejection:</b> If verification is enabled, tray ejection is held until verification completes successfully.</li>"
             f"</ul>"
