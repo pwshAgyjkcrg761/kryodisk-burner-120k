@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.09.29__19.58.49
+# VERSION: 2026.10.03__15.22.53
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.09.29__19.58.49"
+APP_VERSION = "2026.10.03__15.22.53"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -1012,6 +1012,40 @@ class OpticalBurnWorker(QThread):
         selected_engine = getattr(self, 'engine', 'cdbxpcmd').lower()
         start_time = time.time()
 
+        # Pre-burn software volume dismount to invalidate stale Windows sector caches & lock handles
+        if target_dest and sys.platform == "win32":
+            try:
+                self.log(f"Dismounting optical volume on {target_dest} to flush OS sector cache...")
+                FILE_SHARE_READ = 1
+                FILE_SHARE_WRITE = 2
+                OPEN_EXISTING = 3
+                FSCTL_DISMOUNT_VOLUME = 0x00090020
+
+                h_dev = -1
+                for access_flag in (0x80000000 | 0x40000000, 0x80000000, 0):
+                    h_dev = ctypes.windll.kernel32.CreateFileW(
+                        f"\\\\.\\{target_dest}",
+                        access_flag,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        None,
+                        OPEN_EXISTING,
+                        0,
+                        None
+                    )
+                    if h_dev != -1:
+                        break
+
+                if h_dev != -1:
+                    bytes_ret = ctypes.c_ulong(0)
+                    ctypes.windll.kernel32.DeviceIoControl(
+                        h_dev, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None
+                    )
+                    ctypes.windll.kernel32.CloseHandle(h_dev)
+                    self.log("Volume cache flushed successfully.")
+                    time.sleep(1.0)
+            except Exception as d_err:
+                self.log(f"Pre-burn volume dismount note: {d_err}")
+
         if "cdbxp" in selected_engine:
             cdbxp_exe = locate_cdbxpcmd(self.custom_cdbxpcmd_path)
             if not cdbxp_exe:
@@ -1415,6 +1449,8 @@ class OpticalBurnWorker(QThread):
                                 btn_yes = None
                                 btn_no = None
                                 btn_ok = None
+                                btn_retry = None
+                                btn_cancel = None
                                 for ch in children:
                                     ch_txt_buf = ctypes.create_unicode_buffer(512)
                                     user32.GetWindowTextW(ch, ch_txt_buf, 512)
@@ -1429,6 +1465,10 @@ class OpticalBurnWorker(QThread):
                                         btn_no = ch
                                     elif ctrl_id == IDOK or val.lower() == "ok" or val.lower() == "&ok":
                                         btn_ok = ch
+                                    elif ctrl_id == 4 or "retry" in val.lower():
+                                        btn_retry = ch
+                                    elif ctrl_id == 2 or "cancel" in val.lower():
+                                        btn_cancel = ch
 
                                 combined_txt = " ".join(dialog_texts)
 
@@ -1471,7 +1511,50 @@ class OpticalBurnWorker(QThread):
                                     else:
                                         user32.PostMessageW(hwnd, 0x0111, IDYES, 0)  # WM_COMMAND IDYES
 
-                                # 4. Image / Disc Information summary details -> Click OK
+                                # 4. "I/O Error!" -> Flush OS volume cache & auto-click &Retry (up to 2 times), then Cancel
+                                elif "i/o error" in combined_txt or "scsistatus" in combined_txt or btn_retry:
+                                    now = time.time()
+                                    if now - getattr(self, '_last_io_retry_time', 0) > 3.0:
+                                        self._last_io_retry_time = now
+                                        io_retries = getattr(self, '_io_error_retries', 0)
+                                        if io_retries < 2:
+                                            self._io_error_retries = io_retries + 1
+                                            self.log(f"[ImgBurn Action] I/O Error detected -> Dismounting volume {target_dest} and auto-retrying ({self._io_error_retries}/2)...")
+                                            if target_dest and sys.platform == "win32":
+                                                try:
+                                                    FSCTL_DISMOUNT_VOLUME = 0x00090020
+                                                    h_dev_retry = ctypes.windll.kernel32.CreateFileW(
+                                                        f"\\\\.\\{target_dest}",
+                                                        0x80000000 | 0x40000000,
+                                                        1 | 2,
+                                                        None,
+                                                        3,
+                                                        0,
+                                                        None
+                                                    )
+                                                    if h_dev_retry != -1:
+                                                        bytes_ret = ctypes.c_ulong(0)
+                                                        ctypes.windll.kernel32.DeviceIoControl(
+                                                            h_dev_retry, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None
+                                                        )
+                                                        ctypes.windll.kernel32.CloseHandle(h_dev_retry)
+                                                except Exception:
+                                                    pass
+                                            time.sleep(1.0)
+                                            target_btn = btn_retry or user32.GetDlgItem(hwnd, 4)
+                                            if target_btn:
+                                                user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                            else:
+                                                user32.PostMessageW(hwnd, 0x0111, 4, 0)  # WM_COMMAND IDRETRY
+                                        else:
+                                            self.log("[ImgBurn Action] I/O Error persisted after retries -> Auto-cancelling.")
+                                            target_btn = btn_cancel or user32.GetDlgItem(hwnd, 2)
+                                            if target_btn:
+                                                user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                            else:
+                                                user32.PostMessageW(hwnd, 0x0111, 2, 0)  # WM_COMMAND IDCANCEL
+
+                                # 5. Image / Disc Information summary details -> Click OK
                                 elif "information" in combined_txt or "image details" in combined_txt or "sectors:" in combined_txt or btn_ok:
                                     target_btn = btn_ok or user32.GetDlgItem(hwnd, IDOK)
                                     if target_btn:
@@ -4010,6 +4093,7 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.) with automatic media recommendations.</li>"
             f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
             f"<li><b>Rewritable Media Quick Erase (<code>🧹</code>):</b> In DevDebug mode, performs a fast single-pass erase utilizing CDBurnerXP CLI, Windows IMAPI2, and dual primary/backup UDF descriptor zeroing.</li>"
+            f"<li><b>Pre-Burn Volume Flush &amp; I/O Auto-Recovery:</b> Automatically issues a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>) prior to burning to release stale Windows filesystem locks during consecutive disc swaps, coupled with automated I/O error dialog detection and retries in ImgBurn to recover seamlessly from transient sector-0 write blocks.</li>"
             f"</ul>"
             f"<h2>PRIMARY CHECKSUM VALIDATION &amp; INTEGRITY VERIFICATION</h2>"
             f"<ul>"
