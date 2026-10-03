@@ -35,6 +35,7 @@ Key operational features include:
 19. **Fast Startup Bypass:** Supports `-NoDriveScan` (or `-NoScan` / `-SkipDriveScan`) with `-DevDebug` to bypass the initial 5-second optical hardware query and media spin-up on startup for instantaneous application launch.
 20. **Spoken Voice Notifications & Themed UI:** Full support for Dark, Light, and System-synced palettes, paired with Kokoro TTS spoken audio announcements (**River** [USA female] and **Lily** [GB female]) for individual completion and failure events, with a master mute toggle that grays out inactive controls.
 21. **Persistent State Management:** Remembers window geometry, write speed preferences, disc labels, verification settings, custom engine paths, and theme configurations across sessions.
+22. **Pre-Burn Volume Flush & I/O Auto-Recovery:** Automatically issues a software volume dismount (`FSCTL_DISMOUNT_VOLUME`) prior to every burn to invalidate stale Windows filesystem allocations and sector locks from previously burned discs. When burning via ImgBurn, an active modal dialog watcher intercepts transient sector-0 `WRITE (10)` I/O errors, flushes the drive volume, and auto-retries execution seamlessly.
 
 ---
 
@@ -57,6 +58,7 @@ Key operational features include:
 | **Pre-Burn Verify Estimation** | Models physical optical throughput, seek latencies, and remount overhead for accurate pre-burn ETAs. |
 | **Persistent Session Countdown**| Establishes a 0% baseline session estimate that persists jitter-free across both burn and verify phases. |
 | **Primary Checksum Guard** | Validates presence of a primary `.hash` at disc root or depth-1 folders before burning; prevents false matches on nested files. |
+| **Pre-Burn Flush & I/O Recovery** | Issues `FSCTL_DISMOUNT_VOLUME` prior to burning to clear stale OS sector locks; auto-recovers from ImgBurn I/O error prompts. |
 | **Thermal Cooldown & Cache Flush** | 25s settling countdown and software volume dismount (`FSCTL_DISMOUNT_VOLUME`) flush OS sector cache without physical tray cycling. |
 | **Fast Disc Check Guard** | Asynchronous 15s background mount check catches bad burns and unreadable media without UI lockups. |
 | **KryptDist Post-Burn Check** | Scans burned discs for primary manifest and verifies 100% bit-level data integrity, guarded by a 20s stall watchdog. |
@@ -140,4 +142,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.09.29__19.58.49*
+> *2026.10.03__15.22.53*
