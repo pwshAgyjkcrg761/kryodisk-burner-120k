@@ -6,7 +6,7 @@
 ![KryoDisk Burner 120K Dark Mode Main Interface](images/KryoDisk-py_dark_mode_main.png)
 
 ## Overview
-KryoDisk Burner 120K™ is a dedicated optical disc authoring and burning application for Windows. Utilizing integrated **CDBurnerXP CLI (cdbxpcmd.exe)** and **ImgBurn / ImgBurnPortable** engines alongside the Windows Image Mastering API v2.0 (IMAPI2), it authors compliant **Universal Disk Format (UDF 2.50 / UDF 2.60)** file systems and writes finalized single-session discs to CD, DVD, Blu-ray (BD-R), and high-density BDXL media (up to 128GB Quad-Layer).
+KryoDisk Burner 120K™ is a dedicated optical disc authoring and burning application for Windows. Utilizing primary burning engine support via **ImgBurn / ImgBurnPortable** alongside legacy support for **CDBurnerXP CLI (cdbxpcmd.exe)** and the Windows Image Mastering API v2.0 (IMAPI2), it authors compliant **Universal Disk Format (UDF 2.50 / UDF 2.60)** file systems and writes finalized single-session discs to CD, DVD, Blu-ray (BD-R), and high-density BDXL media (up to 128GB Quad-Layer).
 
 **Primary Environment:** Developed and tested on **Python 3.14.5** using the **PyQt6** framework and **pywin32** COM interfaces. It is designed for archivists, system administrators, and storage specialists who require reliable optical media authoring, guaranteed session finalization, configurable burning backends, and seamless post-burn cryptographic integrity verification.
 
@@ -16,9 +16,11 @@ The utility couples direct COM-level hardware communication with an intuitive du
 Key operational features include:
 1. **Universal Optical Media Support:** Authors and writes directly to standard write-once optical formats: CD-R, DVD-R, DVD+R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL). Rewritable media (CD-RW, DVD±RW, BD-RE) is strictly restricted to `-DevDebug` mode for development and scratch testing.
 2. **Instant Rewritable Overwrites & Erased Capacity:** In `-DevDebug` mode, burning to rewritable media evaluates staged payloads against the full erased physical capacity rather than leftover slack space. The action button dynamically updates to **Erase & Burn Disc**, automatically performing sub-second descriptor zeroing or auto-confirmed overwrite passes across CDBurnerXP and ImgBurn without slow manual blanking cycles.
-3. **Dual Burning Engine Architecture:** Choose between **CDBurnerXP CLI** (`cdbxpcmd.exe`) for headless track-level burning or **ImgBurn (long paths)** (`ImgBurn.exe`) for custom UDF 2.50 and UDF 2.60 authoring. All ImgBurn sessions author strictly pure UDF (ISO9660 completely disabled) to eliminate 2GB/4GB file size limits and directory depth constraints, paired with UTF-8 BOM source lists and instant virtual layout staging.
+3. **Dual Burning Engine Architecture:** Powered by **ImgBurn (long paths)** (`ImgBurn.exe`) as the default primary authoring engine, with alternate support for legacy **CDBurnerXP CLI** (`cdbxpcmd.exe`). All ImgBurn sessions author strictly pure UDF (ISO9660 completely disabled) to eliminate 2GB/4GB file size limits and directory depth constraints, paired with UTF-8 BOM source lists and instant virtual layout staging.
 4. **Dual-Pane Staging Browser:** Structure your disc hierarchy using a dedicated left navigation tree and right contents view. Create virtual folders, stage custom directory trees, and remove individual files from added folders freely without engine path collisions.
-5. **Dynamic Path Length Validation:** Live status indicator actively monitors staged file and folder paths based on the selected engine: enforces standard Win32 limits (260 characters for files, 248 characters for directories) for CDBurnerXP, or true UDF 2.50 specifications (max 127 characters per individual file/folder name component, and up to 511 characters cumulative path length) for ImgBurn (long paths).
+5. **In-Disc Path Length Validation:** Live status indicator deeply monitors staged file, folder, and subfolder paths based on the active engine:
+   * **ImgBurn (UDF):** Evaluates the actual destination path physically written to the disc (starting from `\`), freeing you from host PC parent directory lengths. Distinguishes between **UDF Unicode** (max 127 characters for individual file/folder names, max 511 characters cumulative path) and **UDF ASCII / Latin-1** (up to 254 characters for names, max 1023 characters cumulative path).
+   * **CDBurnerXP:** Enforces dual constraints: OSTA UDF name limits (max 127 characters for Unicode, 254 characters for ASCII) combined with Win32 host limits (under 260 characters for files, under 248 for directories) to prevent file-reading and engine errors.
 6. **Full Unicode & Japanese Character Sets:** End-to-end UTF-8 and Unicode pipeline across disc staging, UDF authoring, and post-burn verification. Complete native support for Japanese (Kanji, Hiragana, Katakana), CJK, Cyrillic, accents, and international symbols across all filenames, paths, manifests, and verification pipes.
 7. **Dual-Explorer Add Dialog:** Browse local drives and stage multiple files and directories simultaneously through an integrated dual-pane file and folder picker.
 8. **Physical Disc Inspection:** Direct hardware inspection tool (💽) to explore and browse the physical file contents of the currently inserted disc without leaving the application.
@@ -34,7 +36,7 @@ Key operational features include:
 18. **Developer Debug & Quick Erase:** When launched with `-DevDebug`, unlocks the Quick Erase tool (🧹) powered by CDBurnerXP CLI and Windows IMAPI2 multi-descriptor zeroing to blank test rewritable media (BD-RE, DVD-RW, CD-RW), enables verbose console telemetry, and maintains independent session preferences.
 19. **Fast Startup Bypass:** Supports `-NoDriveScan` (or `-NoScan` / `-SkipDriveScan`) with `-DevDebug` to bypass the initial 5-second optical hardware query and media spin-up on startup for instantaneous application launch.
 20. **Spoken Voice Notifications & Themed UI:** Full support for Dark, Light, and System-synced palettes, paired with Kokoro TTS spoken audio announcements (**River** [USA female] and **Lily** [GB female]) for individual completion and failure events, with a master mute toggle that grays out inactive controls.
-21. **Persistent State Management:** Remembers window geometry, write speed preferences, disc labels, verification settings, custom engine paths, and theme configurations across sessions.
+21. **Persistent State Management:** Remembers window geometry, write speed preferences, disc labels, verification settings, custom engine paths, active optical burner drive selection, and theme configurations across sessions.
 22. **Pre-Burn Volume Flush & I/O Auto-Recovery:** Automatically issues a software volume dismount (`FSCTL_DISMOUNT_VOLUME`) prior to every burn to invalidate stale Windows filesystem allocations and sector locks from previously burned discs. When burning via ImgBurn, an active modal dialog watcher intercepts transient sector-0 `WRITE (10)` I/O errors, flushes the drive volume, and auto-retries execution seamlessly.
 
 ---
@@ -43,11 +45,11 @@ Key operational features include:
 
 | Option / Feature | Description |
 | :--- | :--- |
-| **Dual Burning Engines** | Select between CDBurnerXP CLI (`cdbxpcmd.exe`) and ImgBurn (long paths) (`ImgBurn.exe`) backends. |
+| **Dual Burning Engines** | Primary authoring via ImgBurn (long paths) [Default] alongside legacy CDBurnerXP CLI backend. |
 | **UDF 2.50 & 2.60 Mastering** | Builds compliant Universal Disk Format virtual file systems; ImgBurn mode authors strictly pure UDF (ISO9660 disabled). |
 | **BDXL & Multi-Format Support** | Complete support for CD-R, DVD±R, Blu-ray, and multi-layer BDXL media up to 128GB Quad-Layer (QL). |
 | **Dual-Pane Layout Browser** | Split hierarchical browser for organizing virtual disc directories and staged payloads. |
-| **Live Path Length Validator** | Real-time monitoring of active engine path limits (Win32 260/248 for CDBurnerXP; UDF 2.50 127 char name / 511 char path for ImgBurn). |
+| **Live Path Length Validator** | Real-time in-disc path monitoring: ImgBurn UDF (127/511 Unicode, 254/1023 ASCII) vs CDBurnerXP (UDF names + Win32 260/248 limits). |
 | **Unicode & Japanese Characters** | Full end-to-end UTF-8 pipeline supporting Japanese (Kanji, Hiragana, Katakana), CJK, Cyrillic, and international symbols. |
 | **Dual-Explorer Add Dialog** | Simultaneous file and directory picker for quick batch staging. |
 | **Physical Disc Explorer (💽)** | Integrated browser dialog to inspect files physically present on the inserted disc. |
@@ -142,4 +144,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.10.03__15.22.53*
+> *2026.10.11__12.40.40*
