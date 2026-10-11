@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.10.03__15.22.53
+# VERSION: 2026.10.11__12.40.40
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.10.03__15.22.53"
+APP_VERSION = "2026.10.11__12.40.40"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -2253,7 +2253,8 @@ class DiscBrowserWidget(QWidget):
                 cdata = child.data(0, Qt.ItemDataRole.UserRole) or {}
                 c_path = cdata.get("path", "")
                 if c_path and not c_path.startswith("virtual://") and not cdata.get("is_on_disc", False):
-                    is_inv, max_l = self.check_path_length_violation(c_path)
+                    c_disc_rel = self.get_node_disc_path(child)
+                    is_inv, max_l = self.check_path_length_violation(c_path, c_disc_rel)
                     if is_inv:
                         child.setForeground(0, QColor("#dc3545"))
                         child.setToolTip(0, f"Path length violation ({max_l} characters).")
@@ -2274,7 +2275,7 @@ class DiscBrowserWidget(QWidget):
         if hasattr(self, 'notify_path_status'):
             self.notify_path_status()
 
-    def check_path_length_violation(self, path):
+    def check_path_length_violation(self, path, disc_rel_path=None):
         """Returns (is_invalid, max_found) based on active engine limits."""
         if not path or path.startswith("virtual://") or not os.path.exists(path):
             return False, 0
@@ -2282,34 +2283,66 @@ class DiscBrowserWidget(QWidget):
         is_imgburn = getattr(self, 'engine_mode', 'cdbxp') == "imgburn"
 
         if is_imgburn:
-            base = os.path.basename(path)
-            if len(base) > 127 or len(path) > 511:
+            def _udf_limits(s, is_full_path=False):
+                is_wide = any(ord(c) > 255 for c in s)
+                if is_full_path:
+                    return (511 if is_wide else 1023), is_wide
+                return (127 if is_wide else 254), is_wide
+
+            clean_disc = disc_rel_path if disc_rel_path else (path if path.startswith('\\') else f"\\{os.path.basename(path)}")
+            clean_disc = clean_disc.replace('/', '\\')
+            if not clean_disc.startswith('\\'):
+                clean_disc = f"\\{clean_disc}"
+
+            max_found = len(clean_disc)
+            base = os.path.basename(clean_disc) or os.path.basename(path)
+            base_lim, _ = _udf_limits(base, is_full_path=False)
+            path_lim, _ = _udf_limits(clean_disc, is_full_path=True)
+
+            if len(base) > base_lim or len(clean_disc) > path_lim:
                 return True, max_found
+
             if os.path.isdir(path):
                 try:
                     for root, dirs, files in os.walk(path):
-                        max_found = max(max_found, len(root))
-                        if len(root) > 511:
+                        rel_sub = os.path.relpath(root, path)
+                        curr_disc = clean_disc if rel_sub == "." else os.path.normpath(os.path.join(clean_disc, rel_sub))
+                        max_found = max(max_found, len(curr_disc))
+                        r_lim, _ = _udf_limits(curr_disc, is_full_path=True)
+                        if len(curr_disc) > r_lim:
                             return True, max_found
                         for d in dirs:
-                            if len(d) > 127:
+                            d_lim, _ = _udf_limits(d, is_full_path=False)
+                            if len(d) > d_lim:
                                 return True, max(max_found, len(d))
-                            d_p = os.path.join(root, d)
+                            d_p = os.path.join(curr_disc, d)
                             max_found = max(max_found, len(d_p))
-                            if len(d_p) > 511:
+                            dp_lim, _ = _udf_limits(d_p, is_full_path=True)
+                            if len(d_p) > dp_lim:
                                 return True, max_found
                         for f in files:
-                            if len(f) > 127:
+                            f_lim, _ = _udf_limits(f, is_full_path=False)
+                            if len(f) > f_lim:
                                 return True, max(max_found, len(f))
-                            f_p = os.path.join(root, f)
+                            f_p = os.path.join(curr_disc, f)
                             max_found = max(max_found, len(f_p))
-                            if len(f_p) > 511:
+                            fp_lim, _ = _udf_limits(f_p, is_full_path=True)
+                            if len(f_p) > fp_lim:
                                 return True, max_found
                 except Exception:
                     pass
             return False, max_found
 
-        # CDBurnerXP engine limits (Win32 legacy MAX_PATH)
+        # CDBurnerXP engine limits (UDF name limits 127/254 + Win32 legacy MAX_PATH)
+        def _cdb_name_too_long(name):
+            is_wide = any(ord(c) > 255 for c in name)
+            lim = 127 if is_wide else 254
+            return len(name) > lim
+
+        base_name = os.path.basename(path)
+        if _cdb_name_too_long(base_name):
+            return True, max_found
+
         if os.path.isfile(path):
             return len(path) >= 260, len(path)
         if len(path) >= 248:
@@ -2320,11 +2353,15 @@ class DiscBrowserWidget(QWidget):
                     return True, max(max_found, len(root))
                 max_found = max(max_found, len(root))
                 for d in dirs:
+                    if _cdb_name_too_long(d):
+                        return True, max_found
                     d_path = os.path.join(root, d)
                     max_found = max(max_found, len(d_path))
                     if len(d_path) >= 248:
                         return True, max_found
                 for f in files:
+                    if _cdb_name_too_long(f):
+                        return True, max_found
                     f_path = os.path.join(root, f)
                     max_found = max(max_found, len(f_path))
                     if len(f_path) >= 260:
@@ -2335,69 +2372,159 @@ class DiscBrowserWidget(QWidget):
 
     def get_all_path_violations(self):
         """Scans all staged paths and returns (max_path_length, list_of_violations) according to active engine limits."""
-        staged_paths = self.get_all_paths()
+        staged_items = self.get_staged_items()
         max_len = 0
         violations = []
         is_imgburn = getattr(self, 'engine_mode', 'cdbxp') == "imgburn"
+        found_unicode = False
 
-        for p in staged_paths:
-            if not os.path.exists(p):
-                continue
-            max_len = max(max_len, len(p))
-            base_name = os.path.basename(p)
+        def _check_u(text):
+            nonlocal found_unicode
+            if not found_unicode and text and any(ord(c) > 255 for c in str(text)):
+                found_unicode = True
 
-            if is_imgburn:
-                if len(base_name) > 127:
-                    violations.append((p, len(base_name), "Name > 127 characters (UDF 2.50 limit)"))
-                if len(p) > 511:
-                    violations.append((p, len(p), "Cumulative path > 511 characters (UDF 2.50 limit)"))
+        # Check virtual tree folder names and staged item names (ignoring GUI icon emojis)
+        def _scan_tree_nodes(node):
+            for i in range(node.childCount()):
+                ch = node.child(i)
+                cdata = ch.data(0, Qt.ItemDataRole.UserRole) or {}
+                raw_node_name = cdata.get("name", "")
+                if not raw_node_name:
+                    raw_node_name = ch.text(0).replace("📁 ", "").replace("💿 ", "").replace(" [Disc]", "").replace("💽 ", "").strip()
+                _check_u(raw_node_name)
+                for itm in cdata.get("items", []):
+                    _check_u(itm.get("name", ""))
+                _scan_tree_nodes(ch)
 
-                if os.path.isdir(p):
+        if hasattr(self, 'root_node'):
+            _scan_tree_nodes(self.root_node)
+
+        if is_imgburn:
+            def _udf_spec(s, is_full_path=False):
+                _check_u(s)
+                is_wide = any(ord(c) > 255 for c in s)
+                if is_full_path:
+                    limit = 511 if is_wide else 1023
+                    tag = "Unicode path > 511" if is_wide else "Path > 1023"
+                else:
+                    limit = 127 if is_wide else 254
+                    tag = "Unicode name > 127" if is_wide else "Name > 254"
+                return limit, tag
+
+            for disc_rel, local_abs, is_dir in staged_items:
+                if not local_abs or str(local_abs).startswith("virtual://") or not os.path.exists(local_abs):
+                    continue
+
+                clean_rel = disc_rel.replace('/', '\\')
+                if not clean_rel.startswith('\\'):
+                    clean_rel = f"\\{clean_rel}"
+
+                _check_u(clean_rel)
+                _check_u(local_abs)
+                max_len = max(max_len, len(clean_rel))
+                base_name = os.path.basename(clean_rel) or os.path.basename(local_abs)
+                _check_u(base_name)
+
+                b_lim, b_tag = _udf_spec(base_name, is_full_path=False)
+                if len(base_name) > b_lim:
+                    violations.append((clean_rel, len(base_name), f"{b_tag} characters (UDF limit)"))
+
+                p_lim, p_tag = _udf_spec(clean_rel, is_full_path=True)
+                if len(clean_rel) > p_lim:
+                    violations.append((clean_rel, len(clean_rel), f"{p_tag} characters (UDF limit)"))
+
+                if is_dir and os.path.isdir(local_abs):
                     try:
-                        for root, dirs, files in os.walk(p):
-                            max_len = max(max_len, len(root))
-                            if len(root) > 511:
-                                violations.append((root, len(root), "Directory path > 511 characters (UDF 2.50 limit)"))
+                        for root, dirs, files in os.walk(local_abs):
+                            _check_u(root)
+                            rel_sub = os.path.relpath(root, local_abs)
+                            curr_disc_dir = clean_rel if rel_sub == "." else os.path.normpath(os.path.join(clean_rel, rel_sub))
+                            _check_u(curr_disc_dir)
+                            max_len = max(max_len, len(curr_disc_dir))
+
+                            r_lim, r_tag = _udf_spec(curr_disc_dir, is_full_path=True)
+                            if len(curr_disc_dir) > r_lim:
+                                violations.append((curr_disc_dir, len(curr_disc_dir), f"Directory {r_tag} characters (UDF limit)"))
+
                             for d in dirs:
-                                if len(d) > 127:
-                                    violations.append((os.path.join(root, d), len(d), "Folder name > 127 characters (UDF 2.50 limit)"))
-                                d_p = os.path.join(root, d)
-                                max_len = max(max_len, len(d_p))
-                                if len(d_p) > 511:
-                                    violations.append((d_p, len(d_p), "Directory path > 511 characters (UDF 2.50 limit)"))
+                                _check_u(d)
+                                d_lim, d_tag = _udf_spec(d, is_full_path=False)
+                                if len(d) > d_lim:
+                                    violations.append((os.path.join(curr_disc_dir, d), len(d), f"Folder {d_tag} characters (UDF limit)"))
+                                d_disc_p = os.path.join(curr_disc_dir, d)
+                                _check_u(d_disc_p)
+                                max_len = max(max_len, len(d_disc_p))
+                                dp_lim, dp_tag = _udf_spec(d_disc_p, is_full_path=True)
+                                if len(d_disc_p) > dp_lim:
+                                    violations.append((d_disc_p, len(d_disc_p), f"Directory {dp_tag} characters (UDF limit)"))
+
                             for f in files:
-                                if len(f) > 127:
-                                    violations.append((os.path.join(root, f), len(f), "File name > 127 characters (UDF 2.50 limit)"))
-                                f_p = os.path.join(root, f)
-                                max_len = max(max_len, len(f_p))
-                                if len(f_p) > 511:
-                                    violations.append((f_p, len(f_p), "File path > 511 characters (UDF 2.50 limit)"))
+                                _check_u(f)
+                                f_lim, f_tag = _udf_spec(f, is_full_path=False)
+                                if len(f) > f_lim:
+                                    violations.append((os.path.join(curr_disc_dir, f), len(f), f"File {f_tag} characters (UDF limit)"))
+                                f_disc_p = os.path.join(curr_disc_dir, f)
+                                _check_u(f_disc_p)
+                                max_len = max(max_len, len(f_disc_p))
+                                fp_lim, fp_tag = _udf_spec(f_disc_p, is_full_path=True)
+                                if len(f_disc_p) > fp_lim:
+                                    violations.append((f_disc_p, len(f_disc_p), f"File {fp_tag} characters (UDF limit)"))
                     except Exception:
                         pass
-            else:
-                if os.path.isfile(p):
-                    if len(p) >= 260:
-                        violations.append((p, len(p), "File path >= 260 characters (Win32 MAX_PATH limit)"))
-                elif os.path.isdir(p):
-                    if len(p) >= 248:
-                        violations.append((p, len(p), "Directory path >= 248 characters (Win32 limit)"))
+        else:
+            # CDBurnerXP: Enforce UDF name limits (127 Unicode / 254 ASCII) AND Win32 path limits (260 file / 248 dir)
+            def _cdb_name_limit(name):
+                is_wide = any(ord(c) > 255 for c in name)
+                lim = 127 if is_wide else 254
+                tag = "Unicode name > 127" if is_wide else "Name > 254"
+                return lim, tag
+
+            for _, local_abs, is_dir in staged_items:
+                if not local_abs or str(local_abs).startswith("virtual://") or not os.path.exists(local_abs):
+                    continue
+                _check_u(local_abs)
+                max_len = max(max_len, len(local_abs))
+                base_name = os.path.basename(local_abs)
+                _check_u(base_name)
+
+                n_lim, n_tag = _cdb_name_limit(base_name)
+                if len(base_name) > n_lim:
+                    violations.append((local_abs, len(base_name), f"{n_tag} characters (UDF limit)"))
+
+                if os.path.isfile(local_abs):
+                    if len(local_abs) >= 260:
+                        violations.append((local_abs, len(local_abs), "File path >= 260 characters (Win32 MAX_PATH limit)"))
+                elif os.path.isdir(local_abs):
+                    if len(local_abs) >= 248:
+                        violations.append((local_abs, len(local_abs), "Directory path >= 248 characters (Win32 limit)"))
                     try:
-                        for root, dirs, files in os.walk(p):
+                        for root, dirs, files in os.walk(local_abs):
+                            _check_u(root)
                             if len(root) >= 248:
                                 violations.append((root, len(root), "Directory path >= 248 characters (Win32 limit)"))
                             max_len = max(max_len, len(root))
                             for d in dirs:
+                                _check_u(d)
+                                d_lim, d_tag = _cdb_name_limit(d)
+                                if len(d) > d_lim:
+                                    violations.append((os.path.join(root, d), len(d), f"Folder {d_tag} characters (UDF limit)"))
                                 d_path = os.path.join(root, d)
                                 max_len = max(max_len, len(d_path))
                                 if len(d_path) >= 248:
                                     violations.append((d_path, len(d_path), "Directory path >= 248 characters (Win32 limit)"))
                             for f in files:
+                                _check_u(f)
+                                f_lim, f_tag = _cdb_name_limit(f)
+                                if len(f) > f_lim:
+                                    violations.append((os.path.join(root, f), len(f), f"File {f_tag} characters (UDF limit)"))
                                 f_path = os.path.join(root, f)
                                 max_len = max(max_len, len(f_path))
                                 if len(f_path) >= 260:
                                     violations.append((f_path, len(f_path), "File path >= 260 characters (Win32 MAX_PATH limit)"))
                     except Exception:
                         pass
+
+        self.has_unicode = found_unicode
         return max_len, violations
 
     def notify_path_status(self):
@@ -2495,13 +2622,19 @@ class DiscBrowserWidget(QWidget):
             row.setData(0, Qt.ItemDataRole.UserRole, itm)
 
             if not is_on_disc and orig_path:
-                is_invalid, max_item_len = self.check_path_length_violation(orig_path)
+                node_rel = self.get_node_disc_path(folder_node)
+                item_disc_path = f"{node_rel}\\{name}"
+                is_invalid, max_item_len = self.check_path_length_violation(orig_path, item_disc_path)
                 if is_invalid:
                     if getattr(self, 'engine_mode', 'cdbxp') == "imgburn":
-                        limit_desc = "Name > 127 chars or Path > 511 chars (UDF 2.50 limit)"
+                        is_wide = any(ord(c) > 255 for c in item_disc_path) or any(ord(c) > 255 for c in orig_path)
+                        if is_wide:
+                            limit_desc = "Unicode detected (limit: max 127 chars for name, 511 for cumulative path)"
+                        else:
+                            limit_desc = "Standard ASCII (limit: max 254 chars for name, 1023 for cumulative path)"
                     else:
-                        limit_desc = "Directory >= 248 chars" if is_dir else "File path >= 260 chars"
-                    tip = f"Path length violation ({max_item_len} characters, limit: {limit_desc}). Please rename or shorten."
+                        limit_desc = "Win32 (Directory >= 248 chars)" if is_dir else "Win32 (File path >= 260 chars)"
+                    tip = f"Path length violation ({max_item_len} characters) - {limit_desc}. Please rename or shorten."
                     for col_idx in range(4):
                         row.setForeground(col_idx, QColor("#dc3545"))
                         row.setToolTip(col_idx, tip)
@@ -2526,10 +2659,16 @@ class DiscBrowserWidget(QWidget):
                         "is_on_disc": is_on_disc
                     })
                     if not is_on_disc:
-                        is_sub_invalid, max_sub_len = self.check_path_length_violation(sub_path)
+                        sub_disc_p = self.get_node_disc_path(sub_node)
+                        is_sub_invalid, max_sub_len = self.check_path_length_violation(sub_path, sub_disc_p)
                         if is_sub_invalid:
                             sub_node.setForeground(0, QColor("#dc3545"))
-                            sub_node.setToolTip(0, f"Path length violation ({max_sub_len} characters).")
+                            if getattr(self, 'engine_mode', 'cdbxp') == "imgburn":
+                                is_wide = any(ord(c) > 255 for c in sub_disc_p) or any(ord(c) > 255 for c in sub_path)
+                                lim_desc = "Unicode detected (limit: max 127 chars for name, 511 for cumulative path)" if is_wide else "Standard ASCII (limit: max 254 chars for name, 1023 for cumulative path)"
+                            else:
+                                lim_desc = "Win32 (Directory >= 248 chars)"
+                            sub_node.setToolTip(0, f"Path length violation ({max_sub_len} characters) - {lim_desc}.")
                     self._populate_subfolders_tree(sub_node, sub_path, is_on_disc)
         except Exception:
             pass
@@ -2569,10 +2708,16 @@ class DiscBrowserWidget(QWidget):
                     "is_dir": True,
                     "is_on_disc": False
                 })
-                is_child_invalid, max_child_len = self.check_path_length_violation(clean_p)
+                c_disc_p = self.get_node_disc_path(child_folder)
+                is_child_invalid, max_child_len = self.check_path_length_violation(clean_p, c_disc_p)
                 if is_child_invalid:
                     child_folder.setForeground(0, QColor("#dc3545"))
-                    child_folder.setToolTip(0, f"Path length violation ({max_child_len} characters).")
+                    if getattr(self, 'engine_mode', 'cdbxp') == "imgburn":
+                        is_wide = any(ord(c) > 255 for c in c_disc_p) or any(ord(c) > 255 for c in clean_p)
+                        lim_desc = "Unicode detected (limit: max 127 chars for name, 511 for cumulative path)" if is_wide else "Standard ASCII (limit: max 254 chars for name, 1023 for cumulative path)"
+                    else:
+                        lim_desc = "Win32 (Directory >= 248 chars)"
+                    child_folder.setToolTip(0, f"Path length violation ({max_child_len} characters) - {lim_desc}.")
                 self._populate_subfolders_tree(child_folder, clean_p, is_on_disc=False)
 
         data["items"] = items
@@ -3371,7 +3516,7 @@ class KryoDiskBurnerApp(QMainWindow):
         opts_layout = QHBoxLayout()
         lbl_engine = QLabel("Engine:")
         self.combo_engine = QComboBox()
-        self.combo_engine.addItems(["CDBurnerXP (cdbxpcmd)", "ImgBurn (long paths)"])
+        self.combo_engine.addItems(["ImgBurn (long paths)", "CDBurnerXP (cdbxpcmd)"])
         self.combo_engine.setToolTip("Select burning engine: CDBurnerXP (true headless CLI) or ImgBurn (supports UDF 2.60)")
         self.combo_engine.currentIndexChanged.connect(self.on_engine_changed)
 
@@ -3617,6 +3762,7 @@ class KryoDiskBurnerApp(QMainWindow):
         QApplication.processEvents()
 
         try:
+            active_drive_id = self.combo_drives.currentData()
             self.combo_drives.blockSignals(True)
             self.combo_drives.clear()
             
@@ -3629,10 +3775,12 @@ class KryoDiskBurnerApp(QMainWindow):
                 for drive in self.drives:
                     self.combo_drives.addItem(drive["name"], drive["id"])
                 
-                saved_drive_id = self.settings.value("selected_drive_id", "")
-                idx = self.combo_drives.findData(saved_drive_id)
+                target_id = active_drive_id or self.settings.value("selected_drive_id", "")
+                idx = self.combo_drives.findData(target_id)
                 if idx >= 0:
                     self.combo_drives.setCurrentIndex(idx)
+                elif self.combo_drives.count() > 0:
+                    self.combo_drives.setCurrentIndex(0)
             
             self.combo_drives.blockSignals(False)
             self.on_drive_selected(self.combo_drives.currentIndex())
@@ -3641,6 +3789,9 @@ class KryoDiskBurnerApp(QMainWindow):
 
     def on_drive_selected(self, index):
         drive_id = self.combo_drives.currentData()
+        if drive_id and hasattr(self, 'settings'):
+            self.settings.setValue("selected_drive_id", drive_id)
+
         if not drive_id:
             self.current_media_info = {
                 "media_type_name": "No Disc",
@@ -3812,26 +3963,47 @@ class KryoDiskBurnerApp(QMainWindow):
         if not hasattr(self, 'lbl_path_length'):
             return
         is_imgburn = hasattr(self, 'combo_engine') and "imgburn" in self.combo_engine.currentText().lower()
-        max_limit = 511 if is_imgburn else 259
-        engine_tag = "UDF 2.50" if is_imgburn else "Win32"
+        if is_imgburn:
+            has_unicode = getattr(self.path_list, 'has_unicode', False)
+            max_limit = 511 if has_unicode else 1023
+            enc_name = "Unicode" if has_unicode else "ASCII"
+            lim_desc = "127 Name / 511 Path" if has_unicode else "254 Name / 1023 Path"
+        else:
+            max_limit = 259
+            enc_name = "Win32"
+            lim_desc = "260 File / 248 Folder"
 
         if max_len == 0:
             self.lbl_path_length.setText("Max Path Length: 0 chars [OK]")
             self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #28a745;")
+            self.lbl_path_length.setToolTip("")
         elif has_violations:
             count = len(violations) if violations else 1
-            self.lbl_path_length.setText(f"Max Path Length: {max_len} chars ⚠ [{count} Item(s) Too Long!]")
-            self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #dc3545;")
             if is_imgburn:
-                self.lbl_path_length.setToolTip("One or more items exceed UDF 2.50 specifications (max 127 chars per name, max 511 cumulative path).")
+                violation_has_unicode = has_unicode or any(any(ord(c) > 255 for c in v[0]) for v in violations)
+                v_enc = "Unicode" if violation_has_unicode else "ASCII"
+                v_lim = "127 Name / 511 Path" if violation_has_unicode else "254 Name / 1023 Path"
+                self.lbl_path_length.setText(f"Max Path Length: {max_len} chars ⚠ [{count} {v_enc} Item(s) Exceed Limit! ({v_lim})]")
+                self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #dc3545;")
+                if violation_has_unicode:
+                    self.lbl_path_length.setToolTip("One or more items exceed UDF Unicode limits (max 127 chars for names, max 511 chars cumulative path).")
+                else:
+                    self.lbl_path_length.setToolTip("One or more items exceed UDF ASCII limits (max 254 chars for names, max 1023 chars cumulative path).")
             else:
+                self.lbl_path_length.setText(f"Max Path Length: {max_len} chars ⚠ [{count} Item(s) Exceed Limit! ({lim_desc})]")
+                self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #dc3545;")
                 self.lbl_path_length.setToolTip("One or more files (>= 260 chars) or folders (>= 248 chars) exceed Windows CDBurnerXP limits.")
         else:
-            self.lbl_path_length.setText(f"Max Path Length: {max_len} / {max_limit} chars [{engine_tag} OK]")
-            self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #28a745;")
             if is_imgburn:
-                self.lbl_path_length.setToolTip("All staged paths are within UDF 2.50 specifications (max 127 chars per name, max 511 cumulative path).")
+                self.lbl_path_length.setText(f"Max Path Length: {max_len} / {max_limit} chars [UDF {enc_name} OK ({lim_desc})]")
+                self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #28a745;")
+                if has_unicode:
+                    self.lbl_path_length.setToolTip("All staged paths are within UDF Unicode limits (max 127 chars for names, max 511 chars cumulative path).")
+                else:
+                    self.lbl_path_length.setToolTip("All staged paths are within UDF ASCII limits (max 254 chars for names, max 1023 chars cumulative path).")
             else:
+                self.lbl_path_length.setText(f"Max Path Length: {max_len} / {max_limit} chars [Win32 OK ({lim_desc})]")
+                self.lbl_path_length.setStyleSheet("font-size: 11px; font-weight: bold; color: #28a745;")
                 self.lbl_path_length.setToolTip("All staged paths are within standard Windows CDBurnerXP limits (under 260 chars).")
 
     def load_saved_settings(self):
@@ -3853,7 +4025,7 @@ class KryoDiskBurnerApp(QMainWindow):
                 idx_udf = self.combo_udf.findText(saved_udf)
                 if idx_udf >= 0:
                     self.combo_udf.setCurrentIndex(idx_udf)
-                saved_engine = self.settings.value("burn_engine", "CDBurnerXP (cdbxpcmd)")
+                saved_engine = self.settings.value("burn_engine", "ImgBurn (long paths)")
                 idx_eng = self.combo_engine.findText(saved_engine)
                 if idx_eng >= 0:
                     self.combo_engine.setCurrentIndex(idx_eng)
@@ -4064,13 +4236,13 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<p>MANUAL &amp; USAGE GUIDE | Copyright (C) 2026 pwshAgyjkcrg761</p><br>"
             f"<h2>OVERVIEW</h2>"
             f"<p><b>KryoDisk Burner 120K</b> is a high-performance optical disc authoring and burning application for Windows. "
-            f"It features dual burning engine support utilizing <b>CDBurnerXP CLI (cdbxpcmd.exe)</b> for headless operation and "
-            f"<b>ImgBurn / ImgBurnPortable</b> to author pure, compliant <b>Universal Disk Format (UDF 2.50 / UDF 2.60)</b> file systems "
-            f"across CD, DVD, Blu-ray (BD-R/RE), and high-capacity BDXL media (up to 128GB Quad-Layer).</p>"
+            f"It features primary burning engine support utilizing <b>ImgBurn / ImgBurnPortable</b> to author pure, compliant "
+            f"<b>Universal Disk Format (UDF 2.50 / UDF 2.60)</b> file systems across CD, DVD, Blu-ray (BD-R/RE), and high-capacity BDXL media "
+            f"(up to 128GB Quad-Layer), along with legacy support for <b>CDBurnerXP CLI (cdbxpcmd.exe)</b>.</p>"
             f"<h2>BURNING ENGINES &amp; PREFERENCES</h2>"
             f"<ul>"
-            f"<li><b>CDBurnerXP CLI (Default):</b> True headless CLI burning engine that formats and burns data discs with live track progress and volume management.</li>"
-            f"<li><b>ImgBurn (long paths):</b> Advanced optical authoring engine supporting customizable UDF 2.50 and UDF 2.60 revisions, powered by instant NTFS virtual layout staging and native support for long file paths. All burns are authored strictly as pure UDF (ISO9660 disabled) to eliminate legacy file size and naming restrictions.</li>"
+            f"<li><b>ImgBurn (long paths) [Default]:</b> Advanced optical authoring engine supporting customizable UDF 2.50 and UDF 2.60 revisions, powered by instant NTFS virtual layout staging and native support for long file paths. All burns are authored strictly as pure UDF (ISO9660 disabled) to eliminate legacy file size and naming restrictions.</li>"
+            f"<li><b>CDBurnerXP CLI:</b> Legacy headless CLI burning engine that formats and burns data discs with live track progress and volume management.</li>"
             f"<li><b>KryptDist Verifier (KryptDist.py):</b> Integrated cryptographic verification engine for post-burn data validation.</li>"
             f"<li><b>Preferences (Tools -&gt; Preferences):</b> Divided into two tabs: <b>Engines</b> (configure custom executable/script paths or auto-detect) and <b>Notifications</b> (configure spoken audio alerts, voices, and individual event toggles).</li>"
             f"<li><b>Voice Notifications:</b> Spoken audio alerts powered by Kokoro TTS with customizable voices (<b>River</b> [USA female] and <b>Lily</b> [GB female]) for Burn Completed, Burn Completed &amp; Verified, Burn Failed, and Verify Failed. Checking <i>Disable Notification Sounds</i> mutes all alerts and grays out inactive options.</li>"
@@ -4080,7 +4252,15 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<ul>"
             f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Create virtual folders, add custom directories, and remove individual files from staged folders freely.</li>"
             f"<li><b>Adding Data:</b> Use the <b>➕ Add Files &amp; Folders</b> dual-explorer dialog, send items via Windows <b>SendTo</b>, or pass paths on startup.</li>"
-            f"<li><b>Path Length Validation:</b> Dynamically monitors staged paths based on active engine: enforces Win32 limits (260 chars for files, 248 chars for directories) when CDBurnerXP is active, or UDF 2.50 specifications (max 127 chars per file/folder name, max 511 chars cumulative path length) when ImgBurn (long paths) is active.</li>"
+            f"<li><b>In-Disc Path Length Validation:</b> Dynamically monitors staged paths based on active engine:</li>"
+            f"  <ul>"
+            f"    <li><b>ImgBurn (UDF):</b> Evaluates the actual destination path physically recorded on the disc (starting from <code>\\</code>), freeing you from host PC parent directory lengths. Deeply inspects all files, folders, and subfolders to apply exact OSTA UDF rules:</li>"
+            f"      <ul>"
+            f"        <li><b>UDF Unicode (16-bit):</b> When international glyphs (Japanese Kanji/Kana, CJK, Cyrillic, etc.) are present, enforces max <b>127 characters</b> per file/folder name and max <b>511 characters</b> cumulative path length.</li>"
+            f"        <li><b>UDF ASCII / Latin-1 (8-bit):</b> When pure standard characters are present, allows up to <b>254 characters</b> per file/folder name and max <b>1023 characters</b> cumulative path length.</li>"
+            f"      </ul>"
+            f"    <li><b>CDBurnerXP:</b> Enforces dual constraints: OSTA UDF name limits (max 127 characters for Unicode, 254 characters for ASCII) combined with Win32 host limits (under 260 characters for files, under 248 for directories) to prevent file-reading and engine errors during burns.</li>"
+            f"  </ul>"
             f"<li><b>Session Finalization:</b> Discs are closed and finalized on burn completion to guarantee broad optical drive compatibility and long-term archival data integrity.</li>"
             f"<li><b>Volume Label:</b> Specify a custom disc label (up to 32 characters in accordance with UDF standards).</li>"
             f"<li><b>Unicode &amp; International Characters:</b> Full end-to-end UTF-8 / Unicode support across staged layouts, UTF-8 BOM source lists, disc authoring, and post-burn verification (including Japanese [Kanji, Hiragana, Katakana], CJK, Cyrillic, accents, and symbols).</li>"
@@ -4419,11 +4599,14 @@ class KryoDiskBurnerApp(QMainWindow):
 
             sample_str = "\n".join(sample_list)
             is_imgburn = "imgburn" in self.combo_engine.currentText().lower()
-            limit_desc = (
-                "UDF 2.50 specifications (max 127 characters per file/folder name, max 511 cumulative path length)"
-                if is_imgburn else
-                "Windows / CDBurnerXP limits (260 characters for files, 248 for directories)"
-            )
+            if is_imgburn:
+                has_unicode = getattr(self.path_list, 'has_unicode', False) or any(any(ord(c) > 255 for c in v[0]) for v in violations)
+                if has_unicode:
+                    limit_desc = "UDF Unicode limits (max 127 characters for names, max 511 cumulative path length)"
+                else:
+                    limit_desc = "UDF ASCII limits (max 254 characters for names, max 1023 cumulative path length)"
+            else:
+                limit_desc = "Windows / CDBurnerXP limits (260 characters for files, 248 for directories)"
             self.show_alert(
                 "Path Length Limit Exceeded",
                 f"Cannot burn disc: {len(violations)} staged file(s) or folder(s) exceed {limit_desc}:\n\n"
