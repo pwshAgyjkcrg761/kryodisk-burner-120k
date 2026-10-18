@@ -146,4 +146,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.10.18__11.37.29*
+> *2026.10.18__12.56.57*
