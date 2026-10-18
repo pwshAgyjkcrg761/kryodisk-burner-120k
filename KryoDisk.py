@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.10.18__11.37.29
+# VERSION: 2026.10.18__12.56.57
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.10.18__11.37.29"
+APP_VERSION = "2026.10.18__12.56.57"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -797,7 +797,6 @@ class PreferencesDialog(QDialog):
         self.combo_voice.setToolTip("Select voice for spoken audio notifications.")
         voice_row.addWidget(self.lbl_voice)
         voice_row.addWidget(self.combo_voice, 1)
-        notif_layout.addLayout(voice_row)
 
         self.btn_play_voice = QPushButton("▶")
         self.btn_play_voice.setToolTip("Play voice test (Burn Completed)")
