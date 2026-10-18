@@ -35,9 +35,10 @@ Key operational features include:
 17. **Engines & Preferences Organization:** Centralized **Tools > Preferences** dialog partitioned into **Engines** (custom executable/script path discovery and auto-detection for CDBurnerXP, ImgBurn, and KryptDist) and **Notifications** (customizable spoken audio voice announcers and event toggles).
 18. **Developer Debug & Quick Erase:** When launched with `-DevDebug`, unlocks the Quick Erase tool (🧹) powered by CDBurnerXP CLI and Windows IMAPI2 multi-descriptor zeroing to blank test rewritable media (BD-RE, DVD-RW, CD-RW), enables verbose console telemetry, and maintains independent session preferences.
 19. **Fast Startup Bypass:** Supports `-NoDriveScan` (or `-NoScan` / `-SkipDriveScan`) with `-DevDebug` to bypass the initial 5-second optical hardware query and media spin-up on startup for instantaneous application launch.
-20. **Spoken Voice Notifications & Themed UI:** Full support for Dark, Light, and System-synced palettes, paired with Kokoro TTS spoken audio announcements (**River** [USA female] and **Lily** [GB female]) for individual completion and failure events, with a master mute toggle that grays out inactive controls.
+20. **Spoken Voice Notifications & Themed UI:** Full support for Dark, Light, and System-synced palettes, paired with Kokoro TTS spoken audio announcements (**River** [USA female] and **Lily** [GB female]) for individual completion, verification, failure, and initialization timeout events, an audio test button (▶) to preview voices directly, and a master mute toggle that grays out inactive controls.
 21. **Persistent State Management:** Remembers window geometry, write speed preferences, disc labels, verification settings, custom engine paths, active optical burner drive selection, and theme configurations across sessions.
 22. **Pre-Burn Volume Flush & I/O Auto-Recovery:** Automatically issues a software volume dismount (`FSCTL_DISMOUNT_VOLUME`) prior to every burn to invalidate stale Windows filesystem allocations and sector locks from previously burned discs. When burning via ImgBurn, an active modal dialog watcher intercepts transient sector-0 `WRITE (10)` I/O errors, flushes the drive volume, and auto-retries execution seamlessly.
+23. **40-Second Initialization Watchdog & Auto-Retry:** Actively monitors optical write startup. If a drive stalls at 0% for 40 seconds before user track data is written, it forcibly terminates the hung engine, dismounts the volume to flush OS handles, and automatically retries (up to 2 retries). On the second retry, it detects motorized tray drives to physically cycle (eject and reload) the tray to reset firmware and recalibrate lead-in before the final burn attempt, presenting a focused notification if unresponsive.
 
 ---
 
@@ -61,13 +62,14 @@ Key operational features include:
 | **Persistent Session Countdown**| Establishes a 0% baseline session estimate that persists jitter-free across both burn and verify phases. |
 | **Primary Checksum Guard** | Validates presence of a primary `.hash` at disc root or depth-1 folders before burning; prevents false matches on nested files. |
 | **Pre-Burn Flush & I/O Recovery** | Issues `FSCTL_DISMOUNT_VOLUME` prior to burning to clear stale OS sector locks; auto-recovers from ImgBurn I/O error prompts. |
+| **40s Init Watchdog & Recovery** | Detects 0% write stalls after 40s, dismounts volume, and auto-retries with motorized tray cycling before prompting. |
 | **Thermal Cooldown & Cache Flush** | 25s settling countdown and software volume dismount (`FSCTL_DISMOUNT_VOLUME`) flush OS sector cache without physical tray cycling. |
 | **Fast Disc Check Guard** | Asynchronous 15s background mount check catches bad burns and unreadable media without UI lockups. |
 | **KryptDist Post-Burn Check** | Scans burned discs for primary manifest and verifies 100% bit-level data integrity, guarded by a 20s stall watchdog. |
 | **Total Elapsed Time Reporting**| Logs a complete elapsed duration summary (total time, burn time, verify time) at the close of every session. |
 | **Erase & Burn Disc (DevDebug)** | Evaluates rewritable media by total physical erased size; dynamic action button overwrites data seamlessly. |
 | **Preferences & Engine Paths** | Configure and auto-detect paths for CDBurnerXP, ImgBurn, and KryptDist under **Tools > Preferences > Engines**. |
-| **Voice Audio Notifications** | Spoken voice announcements powered by Kokoro TTS (River & Lily) with individual event checkboxes and gray-out mute styling. |
+| **Voice Audio Notifications** | Spoken voice announcements powered by Kokoro TTS (River & Lily), interactive preview button (▶), event toggles, and mute styling. |
 | **Quick Erase (🧹) [DevDebug]** | Rapidly blanks volume descriptors on rewritable media (BD-RE, DVD-RW, CD-RW) via CDBurnerXP CLI. |
 | **Instant Launch Flag** | Run with `-DevDebug -NoDriveScan` to bypass startup drive queries for instant launch. |
 | **Theme Engine** | Full support for Dark, Light, and System-synced palettes via custom `QPalette` implementation. |
@@ -120,7 +122,7 @@ This software is released under the **GNU General Public License v3**.
 
 ### Audio Notification Credits
 * **Engine:** <a href="https://huggingface.co/spaces/hexgrad/Kokoro-TTS" target="_blank">Kokoro TTS</a>
-    * **Asset:** Voice audio notifications (`burn_completed`, `burn_completed_and_verified`, `burn_failed`, `verify_failed`)
+    * **Asset:** Voice audio notifications (`burn_completed`, `burn_completed_and_verified`, `burn_initialization_failed`, `burn_failed`, `verify_failed`)
     * **Voices:** River (USA female) and Lily (Great Britain female)
     * **License:** <a href="https://creativecommons.org/publicdomain/zero/1.0/" target="_blank">CC0 License</a>
 
@@ -144,4 +146,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.10.11__12.40.40*
+> *2026.10.18__11.37.29*
