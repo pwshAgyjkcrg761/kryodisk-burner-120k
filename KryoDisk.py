@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.10.11__12.40.40
+# VERSION: 2026.10.18__11.37.29
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.10.11__12.40.40"
+APP_VERSION = "2026.10.18__11.37.29"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -799,6 +799,13 @@ class PreferencesDialog(QDialog):
         voice_row.addWidget(self.combo_voice, 1)
         notif_layout.addLayout(voice_row)
 
+        self.btn_play_voice = QPushButton("▶")
+        self.btn_play_voice.setToolTip("Play voice test (Burn Completed)")
+        self.btn_play_voice.setFixedWidth(32)
+        self.btn_play_voice.clicked.connect(self.play_voice_preview)
+        voice_row.addWidget(self.btn_play_voice)
+        notif_layout.addLayout(voice_row)
+
         notif_layout.addSpacing(6)
 
         self.lbl_events = QLabel("<b>Notification Events:</b>")
@@ -808,6 +815,8 @@ class PreferencesDialog(QDialog):
         self.chk_sound_burn_completed.setChecked(True)
         self.chk_sound_burn_verified = QCheckBox("Burn Completed && Verified")
         self.chk_sound_burn_verified.setChecked(True)
+        self.chk_sound_burn_init_failed = QCheckBox("Burn Initialization Failed")
+        self.chk_sound_burn_init_failed.setChecked(True)
         self.chk_sound_burn_failed = QCheckBox("Burn Failed")
         self.chk_sound_burn_failed.setChecked(True)
         self.chk_sound_verify_failed = QCheckBox("Verify Failed")
@@ -815,6 +824,7 @@ class PreferencesDialog(QDialog):
 
         notif_layout.addWidget(self.chk_sound_burn_completed)
         notif_layout.addWidget(self.chk_sound_burn_verified)
+        notif_layout.addWidget(self.chk_sound_burn_init_failed)
         notif_layout.addWidget(self.chk_sound_burn_failed)
         notif_layout.addWidget(self.chk_sound_verify_failed)
 
@@ -832,15 +842,29 @@ class PreferencesDialog(QDialog):
 
         self.load_values()
 
+    def play_voice_preview(self):
+        voice = self.combo_voice.currentText()
+        prefix = "huggingface-co_kokoro-tts_gb-lily_" if "lily" in voice.lower() else "huggingface-co_kokoro-tts_us-river_"
+        wav_name = f"{prefix}burn_completed.wav"
+        wav_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "audio-notifications", wav_name))
+        if os.path.isfile(wav_path) and sys.platform == "win32":
+            try:
+                import winsound
+                winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            except Exception:
+                pass
+
     def on_disable_sound_toggled(self, checked):
         enabled = not checked
         dim_style = "color: #777777;" if checked else ""
         widgets = [
             getattr(self, 'lbl_voice', None),
             self.combo_voice,
+            getattr(self, 'btn_play_voice', None),
             getattr(self, 'lbl_events', None),
             self.chk_sound_burn_completed,
             self.chk_sound_burn_verified,
+            self.chk_sound_burn_init_failed,
             self.chk_sound_burn_failed,
             self.chk_sound_verify_failed
         ]
@@ -848,9 +872,6 @@ class PreferencesDialog(QDialog):
             if w:
                 w.setEnabled(enabled)
                 w.setStyleSheet(dim_style)
-        self.chk_sound_burn_verified.setEnabled(enabled)
-        self.chk_sound_burn_failed.setEnabled(enabled)
-        self.chk_sound_verify_failed.setEnabled(enabled)
 
     def browse_cdbxp(self):
         curr = self.txt_cdbxp_path.text().strip() or os.getcwd()
@@ -920,6 +941,8 @@ class PreferencesDialog(QDialog):
             self.chk_sound_burn_failed.setChecked(s.value("sound_burn_failed", True))
             self.chk_sound_verify_failed.setChecked(s.value("sound_verify_failed", True))
 
+            self.chk_sound_burn_init_failed.setChecked(s.value("sound_burn_init_failed", True))
+
             saved_cdbxp = s.value("custom_cdbxpcmd_path", "")
             if saved_cdbxp and os.path.isfile(saved_cdbxp):
                 self.txt_cdbxp_path.setText(os.path.normpath(saved_cdbxp))
@@ -951,6 +974,7 @@ class PreferencesDialog(QDialog):
             s.setValue("notification_voice", self.combo_voice.currentText())
             s.setValue("sound_burn_completed", self.chk_sound_burn_completed.isChecked())
             s.setValue("sound_burn_verified", self.chk_sound_burn_verified.isChecked())
+            s.setValue("sound_burn_init_failed", self.chk_sound_burn_init_failed.isChecked())
             s.setValue("sound_burn_failed", self.chk_sound_burn_failed.isChecked())
             s.setValue("sound_verify_failed", self.chk_sound_verify_failed.isChecked())
 
@@ -968,6 +992,112 @@ class PreferencesDialog(QDialog):
 import tempfile
 
 import time
+
+def is_drive_tray_motorized(drive_letter):
+    """Queries device capabilities to verify if optical drive supports motorized tray closing."""
+    if not drive_letter or sys.platform != "win32":
+        return False
+    target = drive_letter.rstrip('\\')
+    try:
+        GENERIC_READ = 0x80000000
+        GENERIC_WRITE = 0x40000000
+        FILE_SHARE_READ = 1
+        FILE_SHARE_WRITE = 2
+        OPEN_EXISTING = 3
+        IOCTL_STORAGE_LOAD_MEDIA = 0x002D480C
+
+        h_dev = ctypes.windll.kernel32.CreateFileW(
+            f"\\\\.\\{target}",
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            0,
+            None
+        )
+        if h_dev != -1:
+            bytes_ret = ctypes.c_ulong(0)
+            res = ctypes.windll.kernel32.DeviceIoControl(
+                h_dev, IOCTL_STORAGE_LOAD_MEDIA, None, 0, None, 0, ctypes.byref(bytes_ret), None
+            )
+            err = ctypes.windll.kernel32.GetLastError()
+            ctypes.windll.kernel32.CloseHandle(h_dev)
+            # Error codes 1 (ERROR_INVALID_FUNCTION) and 50 (ERROR_NOT_SUPPORTED) indicate manual pull-out tray
+            if res or err not in (1, 50, 120):
+                return True
+    except Exception:
+        pass
+    return False
+
+def cycle_optical_tray_motorized(drive_letter):
+    """Ejects and motorized-reloads the optical tray to reset drive firmware and re-read disc lead-in."""
+    if not drive_letter or sys.platform != "win32":
+        return False
+    target = drive_letter.rstrip('\\')
+    try:
+        IOCTL_STORAGE_EJECT_MEDIA = 0x002D4808
+        IOCTL_STORAGE_LOAD_MEDIA = 0x002D480C
+        IOCTL_STORAGE_CHECK_VERIFY = 0x002D4800
+        GENERIC_READ = 0x80000000
+        GENERIC_WRITE = 0x40000000
+        FILE_SHARE_READ = 1
+        FILE_SHARE_WRITE = 2
+        OPEN_EXISTING = 3
+
+        h_dev = ctypes.windll.kernel32.CreateFileW(
+            f"\\\\.\\{target}",
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            0,
+            None
+        )
+        if h_dev == -1:
+            return False
+
+        bytes_ret = ctypes.c_ulong(0)
+        # Step 1: Eject tray
+        ctypes.windll.kernel32.DeviceIoControl(h_dev, IOCTL_STORAGE_EJECT_MEDIA, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+        ctypes.windll.kernel32.CloseHandle(h_dev)
+
+        time.sleep(2.5)
+
+        # Step 2: Motorized reload
+        h_dev = ctypes.windll.kernel32.CreateFileW(
+            f"\\\\.\\{target}",
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            0,
+            None
+        )
+        if h_dev != -1:
+            ctypes.windll.kernel32.DeviceIoControl(h_dev, IOCTL_STORAGE_LOAD_MEDIA, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+            ctypes.windll.kernel32.CloseHandle(h_dev)
+
+        # Step 3: Wait for spindle spin-up and disc ready
+        time.sleep(3.0)
+        for _ in range(16):
+            h_chk = ctypes.windll.kernel32.CreateFileW(
+                f"\\\\.\\{target}",
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                0,
+                None
+            )
+            if h_chk != -1:
+                ok = ctypes.windll.kernel32.DeviceIoControl(h_chk, IOCTL_STORAGE_CHECK_VERIFY, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                ctypes.windll.kernel32.CloseHandle(h_chk)
+                if ok:
+                    break
+            time.sleep(0.5)
+        return True
+    except Exception:
+        return False
 
 class OpticalBurnWorker(QThread):
     status_update = pyqtSignal(str, str)
@@ -1386,275 +1516,346 @@ class OpticalBurnWorker(QThread):
                 startupinfo.wShowWindow = 0  # SW_HIDE
                 creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
 
-            self._proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                startupinfo=startupinfo,
-                creationflags=creationflags
-            )
+            max_burn_attempts = 3
+            current_attempt = 1
+            burn_succeeded = False
+            timed_out_stall = False
+            ret = 1
 
-            logged_dialog_hwnds = set()
+            while current_attempt <= max_burn_attempts:
+                attempt_start_time = time.time()
+                has_written_data = False
+                stalled_this_attempt = False
 
-            def _poll_and_hide_imgburn(target_pid):
-                if sys.platform != "win32":
-                    return None
-                imgburn_data = {"pct": None, "title": ""}
-                try:
-                    user32 = ctypes.windll.user32
-                    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-                    BM_CLICK = 0x00F5
-                    IDOK = 1
-                    IDYES = 6
-                    IDNO = 7
+                self._proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
+                )
 
-                    EnumChildProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+                logged_dialog_hwnds = set()
 
-                    def _enum_cb(hwnd, _):
-                        p_id = ctypes.c_ulong()
-                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p_id))
-                        if p_id.value == target_pid:
-                            # Hide all ImgBurn windows so operation remains headless
-                            if user32.IsWindowVisible(hwnd):
-                                user32.ShowWindow(hwnd, 0)  # SW_HIDE
+                def _poll_and_hide_imgburn(target_pid):
+                    if sys.platform != "win32":
+                        return None
+                    imgburn_data = {"pct": None, "title": ""}
+                    try:
+                        user32 = ctypes.windll.user32
+                        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+                        BM_CLICK = 0x00F5
+                        IDOK = 1
+                        IDYES = 6
+                        IDNO = 7
 
-                            title_buf = ctypes.create_unicode_buffer(512)
-                            length = user32.GetWindowTextW(hwnd, title_buf, 512)
-                            t_text = title_buf.value if length > 0 else ""
+                        EnumChildProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
-                            if t_text:
-                                pct_m = re.search(r'(\d{1,3})\s*%', t_text)
-                                if pct_m:
-                                    imgburn_data["pct"] = max(0, min(100, int(pct_m.group(1))))
-                                    imgburn_data["title"] = t_text
-                                elif "ImgBurn" in t_text and not imgburn_data["title"]:
-                                    imgburn_data["title"] = t_text
+                        def _enum_cb(hwnd, _):
+                            p_id = ctypes.c_ulong()
+                            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p_id))
+                            if p_id.value == target_pid:
+                                # Hide all ImgBurn windows so operation remains headless
+                                if user32.IsWindowVisible(hwnd):
+                                    user32.ShowWindow(hwnd, 0)  # SW_HIDE
 
-                            # Check for and auto-answer ImgBurn modal confirmation popups
-                            # Class '#32770' is standard Windows dialog class
-                            class_buf = ctypes.create_unicode_buffer(256)
-                            user32.GetClassNameW(hwnd, class_buf, 256)
-                            if class_buf.value == "#32770" or "Confirm" in t_text or "ImgBurn" in t_text:
-                                children = []
+                                title_buf = ctypes.create_unicode_buffer(512)
+                                length = user32.GetWindowTextW(hwnd, title_buf, 512)
+                                t_text = title_buf.value if length > 0 else ""
 
-                                def _enum_children_cb(child_hwnd, _):
-                                    children.append(child_hwnd)
-                                    return True
+                                if t_text:
+                                    pct_m = re.search(r'(\d{1,3})\s*%', t_text)
+                                    if pct_m:
+                                        imgburn_data["pct"] = max(0, min(100, int(pct_m.group(1))))
+                                        imgburn_data["title"] = t_text
+                                    elif "ImgBurn" in t_text and not imgburn_data["title"]:
+                                        imgburn_data["title"] = t_text
 
-                                user32.EnumChildWindows(hwnd, EnumChildProc(_enum_children_cb), 0)
-                                
-                                # Gather all text from static labels and buttons in this dialog
-                                dialog_texts = []
-                                raw_texts = []
-                                btn_yes = None
-                                btn_no = None
-                                btn_ok = None
-                                btn_retry = None
-                                btn_cancel = None
-                                for ch in children:
-                                    ch_txt_buf = ctypes.create_unicode_buffer(512)
-                                    user32.GetWindowTextW(ch, ch_txt_buf, 512)
-                                    val = ch_txt_buf.value.strip()
-                                    if val:
-                                        raw_texts.append(val)
-                                        dialog_texts.append(val.lower())
-                                    ctrl_id = user32.GetDlgCtrlID(ch)
-                                    if ctrl_id == IDYES or val.lower() == "&yes" or val.lower() == "yes":
-                                        btn_yes = ch
-                                    elif ctrl_id == IDNO or val.lower() == "&no" or val.lower() == "no":
-                                        btn_no = ch
-                                    elif ctrl_id == IDOK or val.lower() == "ok" or val.lower() == "&ok":
-                                        btn_ok = ch
-                                    elif ctrl_id == 4 or "retry" in val.lower():
-                                        btn_retry = ch
-                                    elif ctrl_id == 2 or "cancel" in val.lower():
-                                        btn_cancel = ch
+                                # Check for and auto-answer ImgBurn modal confirmation popups
+                                class_buf = ctypes.create_unicode_buffer(256)
+                                user32.GetClassNameW(hwnd, class_buf, 256)
+                                if class_buf.value == "#32770" or "Confirm" in t_text or "ImgBurn" in t_text:
+                                    children = []
 
-                                combined_txt = " ".join(dialog_texts)
+                                    def _enum_children_cb(child_hwnd, _):
+                                        children.append(child_hwnd)
+                                        return True
 
-                                # Only log standalone popup dialogs (filter out internal child tab controls)
-                                style = user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
-                                is_child = bool(style & 0x40000000)       # WS_CHILD
-                                is_tab_panel = "bootable disc" in combined_txt or "folder/file dates" in combined_txt
+                                    user32.EnumChildWindows(hwnd, EnumChildProc(_enum_children_cb), 0)
+                                    
+                                    dialog_texts = []
+                                    raw_texts = []
+                                    btn_yes = None
+                                    btn_no = None
+                                    btn_ok = None
+                                    btn_retry = None
+                                    btn_cancel = None
+                                    for ch in children:
+                                        ch_txt_buf = ctypes.create_unicode_buffer(512)
+                                        user32.GetWindowTextW(ch, ch_txt_buf, 512)
+                                        val = ch_txt_buf.value.strip()
+                                        if val:
+                                            raw_texts.append(val)
+                                            dialog_texts.append(val.lower())
+                                        ctrl_id = user32.GetDlgCtrlID(ch)
+                                        if ctrl_id == IDYES or val.lower() == "&yes" or val.lower() == "yes":
+                                            btn_yes = ch
+                                        elif ctrl_id == IDNO or val.lower() == "&no" or val.lower() == "no":
+                                            btn_no = ch
+                                        elif ctrl_id == IDOK or val.lower() == "ok" or val.lower() == "&ok":
+                                            btn_ok = ch
+                                        elif ctrl_id == 4 or "retry" in val.lower():
+                                            btn_retry = ch
+                                        elif ctrl_id == 2 or "cancel" in val.lower():
+                                            btn_cancel = ch
 
-                                if not is_child and not is_tab_panel:
-                                    if hwnd not in logged_dialog_hwnds:
-                                        logged_dialog_hwnds.add(hwnd)
-                                        raw_summary = " | ".join(raw_texts)
-                                        if raw_summary:
-                                            self.log(f"[ImgBurn Dialog] {t_text or 'Dialog'}: {raw_summary}")
+                                    combined_txt = " ".join(dialog_texts)
 
-                                # 1. "This disc is not empty... All data on the disc will be overwritten!" -> Click YES
-                                if "not empty" in combined_txt or "overwritten" in combined_txt:
-                                    if not getattr(self, '_logged_overwrite_prompt', False):
-                                        self._logged_overwrite_prompt = True
-                                        self.log("[ImgBurn Action] Overwrite prompt detected -> Automatically answered YES")
-                                    target_btn = btn_yes or user32.GetDlgItem(hwnd, IDYES)
-                                    if target_btn:
-                                        user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
-                                    else:
-                                        user32.PostMessageW(hwnd, 0x0111, IDYES, 0)  # WM_COMMAND IDYES
+                                    style = user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
+                                    is_child = bool(style & 0x40000000)       # WS_CHILD
+                                    is_tab_panel = "bootable disc" in combined_txt or "folder/file dates" in combined_txt
 
-                                # 2. "You have only selected one folder... add contents...?" -> Click NO
-                                elif "only selected one folder" in combined_txt or "contents of the folder" in combined_txt:
-                                    target_btn = btn_no or user32.GetDlgItem(hwnd, IDNO)
-                                    if target_btn:
-                                        user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
-                                    else:
-                                        user32.PostMessageW(hwnd, 0x0111, IDNO, 0)  # WM_COMMAND IDNO
+                                    if not is_child and not is_tab_panel:
+                                        if hwnd not in logged_dialog_hwnds:
+                                            logged_dialog_hwnds.add(hwnd)
+                                            raw_summary = " | ".join(raw_texts)
+                                            if raw_summary:
+                                                self.log(f"[ImgBurn Dialog] {t_text or 'Dialog'}: {raw_summary}")
 
-                                # 3. "Do you want to use this volume label?" / Volume label confirmation -> Click YES
-                                elif "volume label" in combined_txt:
-                                    target_btn = btn_yes or user32.GetDlgItem(hwnd, IDYES)
-                                    if target_btn:
-                                        user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
-                                    else:
-                                        user32.PostMessageW(hwnd, 0x0111, IDYES, 0)  # WM_COMMAND IDYES
-
-                                # 4. "I/O Error!" -> Flush OS volume cache & auto-click &Retry (up to 2 times), then Cancel
-                                elif "i/o error" in combined_txt or "scsistatus" in combined_txt or btn_retry:
-                                    now = time.time()
-                                    if now - getattr(self, '_last_io_retry_time', 0) > 3.0:
-                                        self._last_io_retry_time = now
-                                        io_retries = getattr(self, '_io_error_retries', 0)
-                                        if io_retries < 2:
-                                            self._io_error_retries = io_retries + 1
-                                            self.log(f"[ImgBurn Action] I/O Error detected -> Dismounting volume {target_dest} and auto-retrying ({self._io_error_retries}/2)...")
-                                            if target_dest and sys.platform == "win32":
-                                                try:
-                                                    FSCTL_DISMOUNT_VOLUME = 0x00090020
-                                                    h_dev_retry = ctypes.windll.kernel32.CreateFileW(
-                                                        f"\\\\.\\{target_dest}",
-                                                        0x80000000 | 0x40000000,
-                                                        1 | 2,
-                                                        None,
-                                                        3,
-                                                        0,
-                                                        None
-                                                    )
-                                                    if h_dev_retry != -1:
-                                                        bytes_ret = ctypes.c_ulong(0)
-                                                        ctypes.windll.kernel32.DeviceIoControl(
-                                                            h_dev_retry, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None
-                                                        )
-                                                        ctypes.windll.kernel32.CloseHandle(h_dev_retry)
-                                                except Exception:
-                                                    pass
-                                            time.sleep(1.0)
-                                            target_btn = btn_retry or user32.GetDlgItem(hwnd, 4)
-                                            if target_btn:
-                                                user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
-                                            else:
-                                                user32.PostMessageW(hwnd, 0x0111, 4, 0)  # WM_COMMAND IDRETRY
+                                    # 1. "This disc is not empty... All data on the disc will be overwritten!" -> Click YES
+                                    if "not empty" in combined_txt or "overwritten" in combined_txt:
+                                        if not getattr(self, '_logged_overwrite_prompt', False):
+                                            self._logged_overwrite_prompt = True
+                                            self.log("[ImgBurn Action] Overwrite prompt detected -> Automatically answered YES")
+                                        target_btn = btn_yes or user32.GetDlgItem(hwnd, IDYES)
+                                        if target_btn:
+                                            user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
                                         else:
-                                            self.log("[ImgBurn Action] I/O Error persisted after retries -> Auto-cancelling.")
-                                            target_btn = btn_cancel or user32.GetDlgItem(hwnd, 2)
-                                            if target_btn:
-                                                user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                            user32.PostMessageW(hwnd, 0x0111, IDYES, 0)
+
+                                    # 2. "You have only selected one folder... add contents...?" -> Click NO
+                                    elif "only selected one folder" in combined_txt or "contents of the folder" in combined_txt:
+                                        target_btn = btn_no or user32.GetDlgItem(hwnd, IDNO)
+                                        if target_btn:
+                                            user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                        else:
+                                            user32.PostMessageW(hwnd, 0x0111, IDNO, 0)
+
+                                    # 3. "Do you want to use this volume label?" -> Click YES
+                                    elif "volume label" in combined_txt:
+                                        target_btn = btn_yes or user32.GetDlgItem(hwnd, IDYES)
+                                        if target_btn:
+                                            user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                        else:
+                                            user32.PostMessageW(hwnd, 0x0111, IDYES, 0)
+
+                                    # 4. "I/O Error!" -> Flush OS volume cache & auto-click &Retry
+                                    elif "i/o error" in combined_txt or "scsistatus" in combined_txt or btn_retry:
+                                        now = time.time()
+                                        if now - getattr(self, '_last_io_retry_time', 0) > 3.0:
+                                            self._last_io_retry_time = now
+                                            io_retries = getattr(self, '_io_error_retries', 0)
+                                            if io_retries < 2:
+                                                self._io_error_retries = io_retries + 1
+                                                self.log(f"[ImgBurn Action] I/O Error detected -> Dismounting volume {target_dest} and auto-retrying ({self._io_error_retries}/2)...")
+                                                if target_dest and sys.platform == "win32":
+                                                    try:
+                                                        FSCTL_DISMOUNT_VOLUME = 0x00090020
+                                                        h_dev_retry = ctypes.windll.kernel32.CreateFileW(
+                                                            f"\\\\.\\{target_dest}",
+                                                            0x80000000 | 0x40000000,
+                                                            1 | 2,
+                                                            None,
+                                                            3,
+                                                            0,
+                                                            None
+                                                        )
+                                                        if h_dev_retry != -1:
+                                                            bytes_ret = ctypes.c_ulong(0)
+                                                            ctypes.windll.kernel32.DeviceIoControl(
+                                                                h_dev_retry, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None
+                                                            )
+                                                            ctypes.windll.kernel32.CloseHandle(h_dev_retry)
+                                                    except Exception:
+                                                        pass
+                                                time.sleep(1.0)
+                                                target_btn = btn_retry or user32.GetDlgItem(hwnd, 4)
+                                                if target_btn:
+                                                    user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                                else:
+                                                    user32.PostMessageW(hwnd, 0x0111, 4, 0)
                                             else:
-                                                user32.PostMessageW(hwnd, 0x0111, 2, 0)  # WM_COMMAND IDCANCEL
+                                                self.log("[ImgBurn Action] I/O Error persisted after retries -> Auto-cancelling.")
+                                                target_btn = btn_cancel or user32.GetDlgItem(hwnd, 2)
+                                                if target_btn:
+                                                    user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                                else:
+                                                    user32.PostMessageW(hwnd, 0x0111, 2, 0)
 
-                                # 5. Image / Disc Information summary details -> Click OK
-                                elif "information" in combined_txt or "image details" in combined_txt or "sectors:" in combined_txt or btn_ok:
-                                    target_btn = btn_ok or user32.GetDlgItem(hwnd, IDOK)
-                                    if target_btn:
-                                        user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
-                                    else:
-                                        user32.PostMessageW(hwnd, 0x0111, IDOK, 0)  # WM_COMMAND IDOK
-                        return True
+                                    # 5. Image details summary -> Click OK
+                                    elif "information" in combined_txt or "image details" in combined_txt or "sectors:" in combined_txt or btn_ok:
+                                        target_btn = btn_ok or user32.GetDlgItem(hwnd, IDOK)
+                                        if target_btn:
+                                            user32.PostMessageW(target_btn, BM_CLICK, 0, 0)
+                                        else:
+                                            user32.PostMessageW(hwnd, 0x0111, IDOK, 0)
+                            return True
 
-                    user32.EnumWindows(EnumWindowsProc(_enum_cb), 0)
-                except Exception:
-                    pass
-                return imgburn_data
+                        user32.EnumWindows(EnumWindowsProc(_enum_cb), 0)
+                    except Exception:
+                        pass
+                    return imgburn_data
 
-            last_pos = 0
-            current_pct = 0
+                last_pos = 0
+                current_pct = 0
 
-            # Baseline 0% estimate: derive write speed in MB/s from speed label
-            spd_num = 4
-            spd_m = re.search(r'(\d+)\s*x', self.speed_label, re.IGNORECASE)
-            if spd_m:
-                spd_num = max(1, int(spd_m.group(1)))
-            write_bytes_sec = int(spd_num * 4.5 * 1024 * 1024)
-            base_burn_est = (int(self.total_payload_bytes / write_bytes_sec) if write_bytes_sec > 0 else 60) + 15
-            total_burn_est = max(30, base_burn_est)
-            recalibrated_50 = False
+                spd_num = 4
+                spd_m = re.search(r'(\d+)\s*x', self.speed_label, re.IGNORECASE)
+                if spd_m:
+                    spd_num = max(1, int(spd_m.group(1)))
+                write_bytes_sec = int(spd_num * 4.5 * 1024 * 1024)
+                base_burn_est = (int(self.total_payload_bytes / write_bytes_sec) if write_bytes_sec > 0 else 60) + 15
+                total_burn_est = max(30, base_burn_est)
+                recalibrated_50 = False
 
-            while self._proc.poll() is None:
-                if self._is_cancelled:
-                    self._proc.terminate()
-                    self.log("Burn cancelled by user.")
-                    self.burn_finished.emit(False, target_dest, "Operation cancelled by user.")
-                    return
+                while self._proc.poll() is None:
+                    if self._is_cancelled:
+                        self._proc.terminate()
+                        self.log("Burn cancelled by user.")
+                        self.burn_finished.emit(False, target_dest, "Operation cancelled by user.")
+                        return
 
-                poll_info = None
-                if self._proc and self._proc.pid:
-                    poll_info = _poll_and_hide_imgburn(self._proc.pid)
+                    attempt_elapsed = int(time.time() - attempt_start_time)
 
-                if poll_info and poll_info.get("pct") is not None:
-                    current_pct = poll_info["pct"]
+                    # 40-second 0% stall watchdog
+                    if attempt_elapsed >= 40 and not has_written_data and current_pct == 0:
+                        stalled_this_attempt = True
+                        break
 
+                    poll_info = None
+                    if self._proc and self._proc.pid:
+                        poll_info = _poll_and_hide_imgburn(self._proc.pid)
+
+                    if poll_info and poll_info.get("pct") is not None:
+                        current_pct = poll_info["pct"]
+                        if current_pct > 0:
+                            has_written_data = True
+
+                    if os.path.exists(log_path):
+                        try:
+                            with open(log_path, 'r', encoding='utf-8', errors='ignore') as lf:
+                                lf.seek(last_pos)
+                                new_text = lf.read()
+                                last_pos = lf.tell()
+                                if new_text:
+                                    for line in new_text.splitlines():
+                                        line_s = line.strip()
+                                        if line_s:
+                                            self.log(f"[ImgBurn] {line_s}")
+                                            if "Writing" in line_s or "Filling Buffer" in line_s:
+                                                self.status_update.emit(f"Status: {line_s}", target_dest)
+                                                if "Writing Sectors" in line_s or ("Writing Track" in line_s and "LeadIn" not in line_s):
+                                                    has_written_data = True
+                                            elif "Synchronising Cache" in line_s or "Finalising" in line_s:
+                                                self.status_update.emit("Status: Finalizing disc session...", target_dest)
+                        except Exception:
+                            pass
+
+                    elapsed = int(time.time() - start_time)
+
+                    if current_pct >= 50 and not recalibrated_50 and elapsed > 5:
+                        total_burn_est = int(elapsed / (current_pct / 100.0))
+                        recalibrated_50 = True
+
+                    if current_pct >= 100:
+                        calc_remaining = 0
+                    else:
+                        calc_remaining = max(1, total_burn_est - elapsed)
+
+                    phase_title = poll_info.get("title", "") if poll_info else ""
+                    clean_phase = phase_title.replace(" - ImgBurn", "").strip() if phase_title else ""
+                    phase_msg = clean_phase if clean_phase else (f"Writing data ({current_pct}%)" if current_pct > 0 else "Burning...")
+                    est_v = self.estimated_verify_sec if self.verify_after else 0
+                    self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining, est_v)
+                    time.sleep(0.4)
+
+                if stalled_this_attempt:
+                    try:
+                        self._proc.terminate()
+                        self._proc.wait(timeout=2)
+                    except Exception:
+                        try:
+                            self._proc.kill()
+                        except Exception:
+                            pass
+
+                    if current_attempt < max_burn_attempts:
+                        current_attempt += 1
+                        self.log(f"[Auto-Recovery] Initial write stalled at 0% after 40s.")
+
+                        # On second retry (attempt 3), check motorized tray and cycle if supported
+                        if current_attempt == 3 and is_drive_tray_motorized(target_dest):
+                            self.log(f"[Auto-Recovery] Motorized tray detected -> Cycling tray to reset drive firmware before retry...")
+                            self.status_update.emit("Status: Resetting optical drive tray...", target_dest)
+                            cycle_optical_tray_motorized(target_dest)
+
+                        # Software volume dismount to flush OS sector caches & handles
+                        self.log(f"[Auto-Recovery] Dismounting volume {target_dest} and retrying burn (Attempt {current_attempt} of {max_burn_attempts})...")
+                        self.status_update.emit(f"Status: Auto-retrying burn (Attempt {current_attempt}/{max_burn_attempts})...", target_dest)
+                        if target_dest and sys.platform == "win32":
+                            try:
+                                FSCTL_DISMOUNT_VOLUME = 0x00090020
+                                h_dev = ctypes.windll.kernel32.CreateFileW(
+                                    f"\\\\.\\{target_dest}",
+                                    0x80000000 | 0x40000000,
+                                    1 | 2,
+                                    None,
+                                    3,
+                                    0,
+                                    None
+                                )
+                                if h_dev != -1:
+                                    bytes_ret = ctypes.c_ulong(0)
+                                    ctypes.windll.kernel32.DeviceIoControl(h_dev, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+                                    ctypes.windll.kernel32.CloseHandle(h_dev)
+                            except Exception:
+                                pass
+                        time.sleep(2.0)
+                        continue
+                    else:
+                        timed_out_stall = True
+                        break
+
+                ret = self._proc.returncode
                 if os.path.exists(log_path):
                     try:
                         with open(log_path, 'r', encoding='utf-8', errors='ignore') as lf:
                             lf.seek(last_pos)
-                            new_text = lf.read()
-                            last_pos = lf.tell()
-                            if new_text:
-                                for line in new_text.splitlines():
+                            remaining_text = lf.read()
+                            if remaining_text:
+                                for line in remaining_text.splitlines():
                                     line_s = line.strip()
                                     if line_s:
                                         self.log(f"[ImgBurn] {line_s}")
-                                        if "Writing" in line_s or "Filling Buffer" in line_s:
-                                            self.status_update.emit(f"Status: {line_s}", target_dest)
-                                        elif "Synchronising Cache" in line_s or "Finalising" in line_s:
-                                            self.status_update.emit("Status: Finalizing disc session...", target_dest)
                     except Exception:
                         pass
 
-                elapsed = int(time.time() - start_time)
-
-                # Re-calibrate once when reaching 50% milestone
-                if current_pct >= 50 and not recalibrated_50 and elapsed > 5:
-                    total_burn_est = int(elapsed / (current_pct / 100.0))
-                    recalibrated_50 = True
-
-                # Steady countdown from established estimate
-                if current_pct >= 100:
-                    calc_remaining = 0
+                if ret == 0:
+                    burn_succeeded = True
+                    break
                 else:
-                    calc_remaining = max(1, total_burn_est - elapsed)
+                    break
 
-                phase_title = poll_info.get("title", "") if poll_info else ""
-                clean_phase = phase_title.replace(" - ImgBurn", "").strip() if phase_title else ""
-                phase_msg = clean_phase if clean_phase else (f"Writing data ({current_pct}%)" if current_pct > 0 else "Burning...")
-                est_v = self.estimated_verify_sec if self.verify_after else 0
-                self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining, est_v)
-                time.sleep(0.4)
-
-            ret = self._proc.returncode
-            # Flush any unread lines from the ImgBurn session log
-            if os.path.exists(log_path):
-                try:
-                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as lf:
-                        lf.seek(last_pos)
-                        remaining_text = lf.read()
-                        if remaining_text:
-                            for line in remaining_text.splitlines():
-                                line_s = line.strip()
-                                if line_s:
-                                    self.log(f"[ImgBurn] {line_s}")
-                except Exception:
-                    pass
-
-            if ret == 0:
+            if burn_succeeded:
                 elapsed_total = int(time.time() - start_time)
                 mins, secs = divmod(elapsed_total, 60)
                 self.log(f"ImgBurn completed successfully in {mins:02d}:{secs:02d}.")
                 est_v = self.estimated_verify_sec if self.verify_after else 0
                 self.progress_update.emit(100, 100, "Completed", elapsed_total, 0, est_v)
                 self.burn_finished.emit(True, target_dest, "")
+            elif timed_out_stall:
+                self.log("ImgBurn aborted: optical drive timed out at 0% after multiple retry attempts.")
+                self.burn_finished.emit(False, target_dest, "STALL_TIMEOUT: Optical drive timed out at 0% after multiple retry attempts.")
             else:
                 # Extract error details directly from the session log to pinpoint early failures
                 error_details = []
@@ -4245,7 +4446,7 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>CDBurnerXP CLI:</b> Legacy headless CLI burning engine that formats and burns data discs with live track progress and volume management.</li>"
             f"<li><b>KryptDist Verifier (KryptDist.py):</b> Integrated cryptographic verification engine for post-burn data validation.</li>"
             f"<li><b>Preferences (Tools -&gt; Preferences):</b> Divided into two tabs: <b>Engines</b> (configure custom executable/script paths or auto-detect) and <b>Notifications</b> (configure spoken audio alerts, voices, and individual event toggles).</li>"
-            f"<li><b>Voice Notifications:</b> Spoken audio alerts powered by Kokoro TTS with customizable voices (<b>River</b> [USA female] and <b>Lily</b> [GB female]) for Burn Completed, Burn Completed &amp; Verified, Burn Failed, and Verify Failed. Checking <i>Disable Notification Sounds</i> mutes all alerts and grays out inactive options.</li>"
+            f"<li><b>Voice Notifications:</b> Spoken audio alerts powered by Kokoro TTS with customizable voices (<b>River</b> [USA female] and <b>Lily</b> [GB female]) for Burn Completed, Burn Completed &amp; Verified, Burn Initialization Failed, Burn Failed, and Verify Failed, along with an audio test button (<b>▶</b>) to preview voices directly. Checking <i>Disable Notification Sounds</i> mutes all alerts and grays out inactive options.</li>"
             f"<li><b>GUI Themes:</b> Switch between <b>Dark</b>, <b>Light</b>, or <b>System</b> theme under <b>Tools -&gt; Themes</b>.</li>"
             f"</ul>"
             f"<h2>DISC STAGING &amp; LAYOUT</h2>"
@@ -4274,6 +4475,7 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
             f"<li><b>Rewritable Media Quick Erase (<code>🧹</code>):</b> In DevDebug mode, performs a fast single-pass erase utilizing CDBurnerXP CLI, Windows IMAPI2, and dual primary/backup UDF descriptor zeroing.</li>"
             f"<li><b>Pre-Burn Volume Flush &amp; I/O Auto-Recovery:</b> Automatically issues a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>) prior to burning to release stale Windows filesystem locks during consecutive disc swaps, coupled with automated I/O error dialog detection and retries in ImgBurn to recover seamlessly from transient sector-0 write blocks.</li>"
+            f"<li><b>40-Second Initialization Watchdog &amp; Auto-Retry:</b> Actively monitors write startup. If an optical drive stalls at 0% for 40 seconds without writing track data, it forcibly terminates the hung engine, dismounts the volume to release locked OS handles, and automatically retries (up to 2 retries). On the second retry, it detects motorized tray drives to physically cycle (eject and reload) the tray to reset firmware and recalibrate lead-in before the final burn attempt.</li>"
             f"</ul>"
             f"<h2>PRIMARY CHECKSUM VALIDATION &amp; INTEGRITY VERIFICATION</h2>"
             f"<ul>"
@@ -4379,6 +4581,7 @@ class KryoDiskBurnerApp(QMainWindow):
         setting_map = {
             "burn_completed": "sound_burn_completed",
             "burn_completed_and_verified": "sound_burn_verified",
+            "burn_initialization_failed": "sound_burn_init_failed",
             "burn_failed": "sound_burn_failed",
             "verify_failed": "sound_verify_failed"
         }
@@ -5100,11 +5303,22 @@ class KryoDiskBurnerApp(QMainWindow):
         self.burn_duration_sec = int(max(0, now - start_t))
 
         if not success:
-            self.lbl_burn_status.setText("Status: Burn failed.")
             mins, secs = divmod(self.burn_duration_sec, 60)
-            self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn failed)")
-            self.play_notification_sound("burn_failed")
-            self.show_alert("Burn Failed", f"Optical disc burn failed:\n\n{error_msg}", icon_type="error")
+            if "STALL_TIMEOUT:" in error_msg:
+                self.lbl_burn_status.setText("Status: Burn aborted (Drive initialization timeout).")
+                self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Drive initialization timeout)")
+                self.play_notification_sound("burn_initialization_failed")
+                self.show_alert(
+                    "Burn Initialization Failed",
+                    "Optical drive timed out at 0% after multiple retry attempts.\n\n"
+                    "Media was not written to. Please re-seat the disc or power-cycle the drive.",
+                    icon_type="error"
+                )
+            else:
+                self.lbl_burn_status.setText("Status: Burn failed.")
+                self.append_burn_log(f"Total Elapsed Time: {mins:02d}:{secs:02d} (Burn failed)")
+                self.play_notification_sound("burn_failed")
+                self.show_alert("Burn Failed", f"Optical disc burn failed:\n\n{error_msg}", icon_type="error")
             self.refresh_drives()
             return
 
