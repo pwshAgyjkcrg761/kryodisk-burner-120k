@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.10.18__12.56.57
+# VERSION: 2026.10.21__15.57.23
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.10.18__12.56.57"
+APP_VERSION = "2026.10.21__15.57.23"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -644,7 +644,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTabWidget, QLineEdit, QFormLayout, QTreeWidget,
                              QTreeWidgetItem, QSplitter, QHeaderView, QMenu,
                              QInputDialog, QTreeView, QAbstractItemView,
-                             QStackedWidget)
+                             QStackedWidget, QSpinBox)
 from PyQt6.QtGui import (QActionGroup, QPalette, QColor, QIcon, QPixmap, QPainter, 
                          QPen, QFileSystemModel)
 
@@ -778,7 +778,93 @@ class PreferencesDialog(QDialog):
         eng_layout.addStretch()
         self.tabs.addTab(tab_engines, "Engines")
 
-        # Tab 2: Notifications
+        # Tab 2: Options
+        tab_options = QWidget()
+        opt_layout = QVBoxLayout(tab_options)
+
+        lbl_safeguards = QLabel("<b>Hardware & Drive Safeguards</b>")
+        lbl_safeguards.setStyleSheet("font-size: 13px; color: #007acc; margin-bottom: 4px;")
+        opt_layout.addWidget(lbl_safeguards)
+
+        # 1. Pre-burn Volume Dismount
+        self.chk_flush_volume_cache = QCheckBox("Flush optical volume cache before burning")
+        self.chk_flush_volume_cache.setToolTip(
+            "Issues a software volume dismount (FSCTL_DISMOUNT_VOLUME) to flush stale Windows "
+            "filesystem sector allocations and file locks before burning."
+        )
+        opt_layout.addWidget(self.chk_flush_volume_cache)
+
+        opt_layout.addSpacing(6)
+
+        # 2. Stall Watchdog & Auto-Retry
+        self.chk_stall_retry = QCheckBox("Auto-retry burn if drive stalls at 0%")
+        self.chk_stall_retry.setToolTip(
+            "Monitors write initialization. If optical hardware stalls at 0% without writing track data, "
+            "automatically resets drive handles and retries the burn."
+        )
+        opt_layout.addWidget(self.chk_stall_retry)
+
+        stall_row = QHBoxLayout()
+        stall_row.setContentsMargins(20, 0, 0, 0)
+        self.lbl_stall_timeout = QLabel("Stall timeout:")
+        self.spin_stall_timeout = QSpinBox()
+        self.spin_stall_timeout.setRange(15, 120)
+        self.spin_stall_timeout.setValue(40)
+        self.spin_stall_timeout.setSuffix(" s")
+        self.spin_stall_timeout.setFixedWidth(75)
+        self.lbl_rec_stall = QLabel("<small><i>(Recommended: 40s)</i></small>")
+
+        self.lbl_max_retries = QLabel("Max retries:")
+        self.spin_max_retries = QSpinBox()
+        self.spin_max_retries.setRange(1, 4)
+        self.spin_max_retries.setValue(2)
+        self.spin_max_retries.setFixedWidth(55)
+        self.lbl_rec_retries = QLabel("<small><i>(Recommended: 2)</i></small>")
+
+        stall_row.addWidget(self.lbl_stall_timeout)
+        stall_row.addWidget(self.spin_stall_timeout)
+        stall_row.addWidget(self.lbl_rec_stall)
+        stall_row.addSpacing(15)
+        stall_row.addWidget(self.lbl_max_retries)
+        stall_row.addWidget(self.spin_max_retries)
+        stall_row.addWidget(self.lbl_rec_retries)
+        stall_row.addStretch()
+        opt_layout.addLayout(stall_row)
+
+        self.chk_stall_retry.toggled.connect(self.on_stall_retry_toggled)
+
+        opt_layout.addSpacing(6)
+
+        # 3. Post-burn Laser Thermal Cooldown
+        self.chk_laser_cooldown = QCheckBox("Wait for laser diode cooldown before verification")
+        self.chk_laser_cooldown.setToolTip(
+            "Pauses briefly after burning to let the optical pickup unit and laser diode thermally "
+            "stabilize before switching to high-speed read mode for verification."
+        )
+        opt_layout.addWidget(self.chk_laser_cooldown)
+
+        cooldown_row = QHBoxLayout()
+        cooldown_row.setContentsMargins(20, 0, 0, 0)
+        self.lbl_cooldown = QLabel("Cooldown pause:")
+        self.spin_cooldown_sec = QSpinBox()
+        self.spin_cooldown_sec.setRange(5, 120)
+        self.spin_cooldown_sec.setValue(25)
+        self.spin_cooldown_sec.setSuffix(" s")
+        self.spin_cooldown_sec.setFixedWidth(75)
+        self.lbl_rec_cool = QLabel("<small><i>(Recommended: 25s)</i></small>")
+
+        cooldown_row.addWidget(self.lbl_cooldown)
+        cooldown_row.addWidget(self.spin_cooldown_sec)
+        cooldown_row.addWidget(self.lbl_rec_cool)
+        cooldown_row.addStretch()
+        opt_layout.addLayout(cooldown_row)
+
+        self.chk_laser_cooldown.toggled.connect(self.on_laser_cooldown_toggled)
+
+        opt_layout.addStretch()
+        self.tabs.addTab(tab_options, "Options")
+
+        # Tab 3: Notifications
         tab_notifications = QWidget()
         notif_layout = QVBoxLayout(tab_notifications)
 
@@ -840,6 +926,21 @@ class PreferencesDialog(QDialog):
         main_layout.addWidget(button_box)
 
         self.load_values()
+
+    def on_stall_retry_toggled(self, checked):
+        dim_style = "" if checked else "color: #777777;"
+        for w in (getattr(self, 'lbl_stall_timeout', None), getattr(self, 'spin_stall_timeout', None), getattr(self, 'lbl_rec_stall', None),
+                  getattr(self, 'lbl_max_retries', None), getattr(self, 'spin_max_retries', None), getattr(self, 'lbl_rec_retries', None)):
+            if w:
+                w.setEnabled(checked)
+                w.setStyleSheet(dim_style)
+
+    def on_laser_cooldown_toggled(self, checked):
+        dim_style = "" if checked else "color: #777777;"
+        for w in (getattr(self, 'lbl_cooldown', None), getattr(self, 'spin_cooldown_sec', None), getattr(self, 'lbl_rec_cool', None)):
+            if w:
+                w.setEnabled(checked)
+                w.setStyleSheet(dim_style)
 
     def play_voice_preview(self):
         voice = self.combo_voice.currentText()
@@ -942,6 +1043,24 @@ class PreferencesDialog(QDialog):
 
             self.chk_sound_burn_init_failed.setChecked(s.value("sound_burn_init_failed", True))
 
+            # Hardware & Drive Safeguards
+            self.chk_flush_volume_cache.setChecked(s.value("safeguard_flush_volume_cache", True))
+
+            stall_enabled = s.value("safeguard_stall_retry", True)
+            self.chk_stall_retry.setChecked(stall_enabled)
+            self.spin_stall_timeout.setValue(int(s.value("safeguard_stall_timeout_sec", 40)))
+            self.spin_max_retries.setValue(int(s.value("safeguard_max_retries", 2)))
+            self.spin_stall_timeout.setEnabled(stall_enabled)
+            self.spin_max_retries.setEnabled(stall_enabled)
+            self.lbl_stall_timeout.setEnabled(stall_enabled)
+            self.lbl_max_retries.setEnabled(stall_enabled)
+
+            cooldown_enabled = s.value("safeguard_laser_cooldown", True)
+            self.chk_laser_cooldown.setChecked(cooldown_enabled)
+            self.spin_cooldown_sec.setValue(int(s.value("safeguard_cooldown_sec", 25)))
+            self.spin_cooldown_sec.setEnabled(cooldown_enabled)
+            self.lbl_cooldown.setEnabled(cooldown_enabled)
+
             saved_cdbxp = s.value("custom_cdbxpcmd_path", "")
             if saved_cdbxp and os.path.isfile(saved_cdbxp):
                 self.txt_cdbxp_path.setText(os.path.normpath(saved_cdbxp))
@@ -976,6 +1095,14 @@ class PreferencesDialog(QDialog):
             s.setValue("sound_burn_init_failed", self.chk_sound_burn_init_failed.isChecked())
             s.setValue("sound_burn_failed", self.chk_sound_burn_failed.isChecked())
             s.setValue("sound_verify_failed", self.chk_sound_verify_failed.isChecked())
+
+            # Hardware & Drive Safeguards
+            s.setValue("safeguard_flush_volume_cache", self.chk_flush_volume_cache.isChecked())
+            s.setValue("safeguard_stall_retry", self.chk_stall_retry.isChecked())
+            s.setValue("safeguard_stall_timeout_sec", self.spin_stall_timeout.value())
+            s.setValue("safeguard_max_retries", self.spin_max_retries.value())
+            s.setValue("safeguard_laser_cooldown", self.chk_laser_cooldown.isChecked())
+            s.setValue("safeguard_cooldown_sec", self.spin_cooldown_sec.value())
 
             cdbxp_val = self.txt_cdbxp_path.text().strip()
             s.setValue("custom_cdbxpcmd_path", cdbxp_val if os.path.isfile(cdbxp_val) else "")
@@ -1106,7 +1233,8 @@ class OpticalBurnWorker(QThread):
 
     def __init__(self, drive_id, drive_letter, staged_paths, volume_label="DATA_DISC",
                  udf_revision="2.50", eject_when_done=True, finalize_disc=True,
-                 custom_cdbxpcmd_path=None, custom_imgburn_path=None, estimated_verify_sec=0):
+                 custom_cdbxpcmd_path=None, custom_imgburn_path=None, estimated_verify_sec=0,
+                 flush_volume_cache=True, stall_retry_enabled=True, stall_timeout_sec=40, max_retries=2):
         super().__init__()
         self.drive_id = drive_id
         self.drive_letter = drive_letter or ""
@@ -1118,6 +1246,10 @@ class OpticalBurnWorker(QThread):
         self.custom_cdbxpcmd_path = custom_cdbxpcmd_path
         self.custom_imgburn_path = custom_imgburn_path
         self.estimated_verify_sec = estimated_verify_sec
+        self.flush_volume_cache = flush_volume_cache
+        self.stall_retry_enabled = stall_retry_enabled
+        self.stall_timeout_sec = max(10, int(stall_timeout_sec))
+        self.max_retries = max(0, int(max_retries))
         self.total_payload_bytes = 0
         self._is_cancelled = False
         self._proc = None
@@ -1142,7 +1274,7 @@ class OpticalBurnWorker(QThread):
         start_time = time.time()
 
         # Pre-burn software volume dismount to invalidate stale Windows sector caches & lock handles
-        if target_dest and sys.platform == "win32":
+        if self.flush_volume_cache and target_dest and sys.platform == "win32":
             try:
                 self.log(f"Dismounting optical volume on {target_dest} to flush OS sector cache...")
                 FILE_SHARE_READ = 1
@@ -1509,13 +1641,27 @@ class OpticalBurnWorker(QThread):
 
             startupinfo = None
             creationflags = 0
+            h_hidden_desktop = None
+            h_original_desktop = None
             if sys.platform == "win32":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = 0  # SW_HIDE
                 creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+                try:
+                    user32 = ctypes.windll.user32
+                    h_original_desktop = user32.GetThreadDesktop(ctypes.windll.kernel32.GetCurrentThreadId())
+                    hidden_desktop_name = f"KryoDiskDesktop_{os.getpid()}"
+                    h_hidden_desktop = user32.CreateDesktopW(
+                        hidden_desktop_name, None, None, 0, 0x10000000, None  # GENERIC_ALL
+                    )
+                    if h_hidden_desktop:
+                        startupinfo.lpDesktop = hidden_desktop_name
+                        user32.SetThreadDesktop(h_hidden_desktop)
+                except Exception:
+                    pass
 
-            max_burn_attempts = 3
+            max_burn_attempts = (1 + self.max_retries) if self.stall_retry_enabled else 1
             current_attempt = 1
             burn_succeeded = False
             timed_out_stall = False
@@ -1526,13 +1672,67 @@ class OpticalBurnWorker(QThread):
                 has_written_data = False
                 stalled_this_attempt = False
 
-                self._proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    startupinfo=startupinfo,
-                    creationflags=creationflags
-                )
+                self._proc = None
+                if sys.platform == "win32" and HAS_WIN32COM:
+                    try:
+                        import win32process
+                        import win32con
+                        import win32event
+
+                        class _Win32Proc:
+                            def __init__(self, hp, ht, p):
+                                self.hProcess = hp
+                                self.hThread = ht
+                                self.pid = p
+                                self.returncode = None
+
+                            def poll(self):
+                                if self.returncode is not None:
+                                    return self.returncode
+                                res = win32event.WaitForSingleObject(self.hProcess, 0)
+                                if res == 0:
+                                    self.returncode = win32process.GetExitCodeProcess(self.hProcess)
+                                    return self.returncode
+                                return None
+
+                            def wait(self, timeout=None):
+                                ms = int(timeout * 1000) if timeout else win32event.INFINITE
+                                win32event.WaitForSingleObject(self.hProcess, ms)
+                                self.returncode = win32process.GetExitCodeProcess(self.hProcess)
+                                return self.returncode
+
+                            def terminate(self):
+                                try:
+                                    win32process.TerminateProcess(self.hProcess, 1)
+                                except Exception:
+                                    pass
+
+                            def kill(self):
+                                self.terminate()
+
+                        si = win32process.STARTUPINFO()
+                        si.dwFlags = win32process.STARTF_USESHOWWINDOW
+                        si.wShowWindow = win32con.SW_HIDE
+                        desk_name = locals().get("hidden_desktop_name", "")
+                        if desk_name:
+                            si.lpDesktop = desk_name
+
+                        cmd_line = subprocess.list2cmdline(cmd)
+                        hp, ht, p_id, _ = win32process.CreateProcess(
+                            None, cmd_line, None, None, 0, 0x08000000, None, None, si
+                        )
+                        self._proc = _Win32Proc(hp, ht, p_id)
+                    except Exception as pe:
+                        self.log(f"win32process launch notice: {pe}")
+
+                if self._proc is None:
+                    self._proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        startupinfo=startupinfo,
+                        creationflags=creationflags
+                    )
 
                 logged_dialog_hwnds = set()
 
@@ -1554,9 +1754,8 @@ class OpticalBurnWorker(QThread):
                             p_id = ctypes.c_ulong()
                             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p_id))
                             if p_id.value == target_pid:
-                                # Hide all ImgBurn windows so operation remains headless
-                                if user32.IsWindowVisible(hwnd):
-                                    user32.ShowWindow(hwnd, 0)  # SW_HIDE
+                                # Banish window off-screen without hiding so child controls remain enabled to process clicks
+                                user32.SetWindowPos(hwnd, 0, -32000, -32000, 0, 0, 0x0001 | 0x0004 | 0x0010)
 
                                 title_buf = ctypes.create_unicode_buffer(512)
                                 length = user32.GetWindowTextW(hwnd, title_buf, 512)
@@ -1717,8 +1916,32 @@ class OpticalBurnWorker(QThread):
                 total_burn_est = max(30, base_burn_est)
                 recalibrated_50 = False
 
+                import threading
+                watcher_stop_event = threading.Event()
+                latest_poll_info = [None]
+
+                def _fast_window_watcher():
+                    if sys.platform == "win32" and h_hidden_desktop:
+                        try:
+                            ctypes.windll.user32.SetThreadDesktop(h_hidden_desktop)
+                        except Exception:
+                            pass
+                    while not watcher_stop_event.is_set():
+                        try:
+                            if self._proc and self._proc.pid:
+                                res = _poll_and_hide_imgburn(self._proc.pid)
+                                if res:
+                                    latest_poll_info[0] = res
+                        except Exception:
+                            pass
+                        time.sleep(0.01)
+
+                t_watcher = threading.Thread(target=_fast_window_watcher, daemon=True)
+                t_watcher.start()
+
                 while self._proc.poll() is None:
                     if self._is_cancelled:
+                        watcher_stop_event.set()
                         self._proc.terminate()
                         self.log("Burn cancelled by user.")
                         self.burn_finished.emit(False, target_dest, "Operation cancelled by user.")
@@ -1726,14 +1949,12 @@ class OpticalBurnWorker(QThread):
 
                     attempt_elapsed = int(time.time() - attempt_start_time)
 
-                    # 40-second 0% stall watchdog
-                    if attempt_elapsed >= 40 and not has_written_data and current_pct == 0:
+                    # Configurable 0% stall watchdog
+                    if self.stall_retry_enabled and attempt_elapsed >= self.stall_timeout_sec and not has_written_data and current_pct == 0:
                         stalled_this_attempt = True
                         break
 
-                    poll_info = None
-                    if self._proc and self._proc.pid:
-                        poll_info = _poll_and_hide_imgburn(self._proc.pid)
+                    poll_info = latest_poll_info[0]
 
                     if poll_info and poll_info.get("pct") is not None:
                         current_pct = poll_info["pct"]
@@ -1776,7 +1997,9 @@ class OpticalBurnWorker(QThread):
                     phase_msg = clean_phase if clean_phase else (f"Writing data ({current_pct}%)" if current_pct > 0 else "Burning...")
                     est_v = self.estimated_verify_sec if self.verify_after else 0
                     self.progress_update.emit(current_pct, 100, phase_msg, elapsed, calc_remaining, est_v)
-                    time.sleep(0.4)
+                    time.sleep(0.25)
+
+                watcher_stop_event.set()
 
                 if stalled_this_attempt:
                     try:
@@ -1790,10 +2013,10 @@ class OpticalBurnWorker(QThread):
 
                     if current_attempt < max_burn_attempts:
                         current_attempt += 1
-                        self.log(f"[Auto-Recovery] Initial write stalled at 0% after 40s.")
+                        self.log(f"[Auto-Recovery] Initial write stalled at 0% after {self.stall_timeout_sec}s.")
 
-                        # On second retry (attempt 3), check motorized tray and cycle if supported
-                        if current_attempt == 3 and is_drive_tray_motorized(target_dest):
+                        # On final retry attempt, check motorized tray and cycle if supported
+                        if current_attempt == max_burn_attempts and is_drive_tray_motorized(target_dest):
                             self.log(f"[Auto-Recovery] Motorized tray detected -> Cycling tray to reset drive firmware before retry...")
                             self.status_update.emit("Status: Resetting optical drive tray...", target_dest)
                             cycle_optical_tray_motorized(target_dest)
@@ -1801,7 +2024,7 @@ class OpticalBurnWorker(QThread):
                         # Software volume dismount to flush OS sector caches & handles
                         self.log(f"[Auto-Recovery] Dismounting volume {target_dest} and retrying burn (Attempt {current_attempt} of {max_burn_attempts})...")
                         self.status_update.emit(f"Status: Auto-retrying burn (Attempt {current_attempt}/{max_burn_attempts})...", target_dest)
-                        if target_dest and sys.platform == "win32":
+                        if self.flush_volume_cache and target_dest and sys.platform == "win32":
                             try:
                                 FSCTL_DISMOUNT_VOLUME = 0x00090020
                                 h_dev = ctypes.windll.kernel32.CreateFileW(
@@ -1876,6 +2099,16 @@ class OpticalBurnWorker(QThread):
             self.log(f"Burn process error: {e}")
             self.burn_finished.emit(False, self.drive_letter, str(e))
         finally:
+            if sys.platform == "win32":
+                try:
+                    user32 = ctypes.windll.user32
+                    if h_original_desktop:
+                        user32.SetThreadDesktop(h_original_desktop)
+                    if h_hidden_desktop:
+                        user32.CloseDesktop(h_hidden_desktop)
+                except Exception:
+                    pass
+
             if temp_dir and os.path.exists(temp_dir):
                 try:
                     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -2056,11 +2289,12 @@ class DiscMountProbeWorker(QThread):
     log_message = pyqtSignal(str)
     probe_finished = pyqtSignal(bool, str, str)  # success, first_hash_path, error_msg
 
-    def __init__(self, drive_letter, timeout_sec=15, cooldown_sec=25):
+    def __init__(self, drive_letter, timeout_sec=15, cooldown_sec=25, flush_volume_cache=True):
         super().__init__()
         self.drive_letter = drive_letter or ""
         self.timeout_sec = timeout_sec
-        self.cooldown_sec = cooldown_sec
+        self.cooldown_sec = max(0, int(cooldown_sec))
+        self.flush_volume_cache = flush_volume_cache
         self._is_cancelled = False
 
     def cancel(self):
@@ -2071,16 +2305,19 @@ class DiscMountProbeWorker(QThread):
         target_root = f"{target_dest}\\" if target_dest else ""
 
         # 1. Thermal cool-down and drive spin-down countdown
-        self.log_message.emit(f"Starting {self.cooldown_sec}s optical drive cool-down and settling pause...")
-        for remaining in range(self.cooldown_sec, 0, -1):
-            if self._is_cancelled:
-                self.probe_finished.emit(False, "", "Operation cancelled by user.")
-                return
-            self.status_update.emit(f"Status: Drive cooling down & settling ({remaining}s)...")
-            time.sleep(1.0)
+        if self.cooldown_sec > 0:
+            self.log_message.emit(f"Starting {self.cooldown_sec}s optical drive cool-down and settling pause...")
+            for remaining in range(self.cooldown_sec, 0, -1):
+                if self._is_cancelled:
+                    self.probe_finished.emit(False, "", "Operation cancelled by user.")
+                    return
+                self.status_update.emit(f"Status: Drive cooling down & settling ({remaining}s)...")
+                time.sleep(1.0)
+        else:
+            self.log_message.emit("Optical drive cool-down pause skipped.")
 
         # 2. Software volume dismount to invalidate stale Windows UDF/CDFS sector caches
-        if target_dest and sys.platform == "win32":
+        if self.flush_volume_cache and target_dest and sys.platform == "win32":
             try:
                 self.log_message.emit(f"Dismounting optical volume on {target_dest} to flush OS sector cache...")
                 FILE_SHARE_READ = 1
@@ -4444,7 +4681,8 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>ImgBurn (long paths) [Default]:</b> Advanced optical authoring engine supporting customizable UDF 2.50 and UDF 2.60 revisions, powered by instant NTFS virtual layout staging and native support for long file paths. All burns are authored strictly as pure UDF (ISO9660 disabled) to eliminate legacy file size and naming restrictions.</li>"
             f"<li><b>CDBurnerXP CLI:</b> Legacy headless CLI burning engine that formats and burns data discs with live track progress and volume management.</li>"
             f"<li><b>KryptDist Verifier (KryptDist.py):</b> Integrated cryptographic verification engine for post-burn data validation.</li>"
-            f"<li><b>Preferences (Tools -&gt; Preferences):</b> Divided into two tabs: <b>Engines</b> (configure custom executable/script paths or auto-detect) and <b>Notifications</b> (configure spoken audio alerts, voices, and individual event toggles).</li>"
+            f"<li><b>Preferences (Tools -&gt; Preferences):</b> Divided into three tabs: <b>Engines</b> (configure custom executable/script paths or auto-detect), <b>Options</b> (configure <b>Hardware &amp; Drive Safeguards</b> such as pre-burn volume cache flushing, write stall auto-retry timeouts, and laser thermal cooldown durations), and <b>Notifications</b> (configure spoken audio alerts, voices, and individual event toggles).</li>"
+            f"<li><b>Headless &amp; Silent Burning:</b> ImgBurn is executed on an isolated hidden Win32 desktop with sub-frame 10ms prompt automation and off-screen positioning, suppressing startup splash screens, overwrite prompts, and focus stealing completely.</li>"
             f"<li><b>Voice Notifications:</b> Spoken audio alerts powered by Kokoro TTS with customizable voices (<b>River</b> [USA female] and <b>Lily</b> [GB female]) for Burn Completed, Burn Completed &amp; Verified, Burn Initialization Failed, Burn Failed, and Verify Failed, along with an audio test button (<b>▶</b>) to preview voices directly. Checking <i>Disable Notification Sounds</i> mutes all alerts and grays out inactive options.</li>"
             f"<li><b>GUI Themes:</b> Switch between <b>Dark</b>, <b>Light</b>, or <b>System</b> theme under <b>Tools -&gt; Themes</b>.</li>"
             f"</ul>"
@@ -4473,8 +4711,8 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.) with automatic media recommendations.</li>"
             f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
             f"<li><b>Rewritable Media Quick Erase (<code>🧹</code>):</b> In DevDebug mode, performs a fast single-pass erase utilizing CDBurnerXP CLI, Windows IMAPI2, and dual primary/backup UDF descriptor zeroing.</li>"
-            f"<li><b>Pre-Burn Volume Flush &amp; I/O Auto-Recovery:</b> Automatically issues a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>) prior to burning to release stale Windows filesystem locks during consecutive disc swaps, coupled with automated I/O error dialog detection and retries in ImgBurn to recover seamlessly from transient sector-0 write blocks.</li>"
-            f"<li><b>40-Second Initialization Watchdog &amp; Auto-Retry:</b> Actively monitors write startup. If an optical drive stalls at 0% for 40 seconds without writing track data, it forcibly terminates the hung engine, dismounts the volume to release locked OS handles, and automatically retries (up to 2 retries). On the second retry, it detects motorized tray drives to physically cycle (eject and reload) the tray to reset firmware and recalibrate lead-in before the final burn attempt.</li>"
+            f"<li><b>Pre-Burn Volume Flush &amp; I/O Auto-Recovery:</b> Issues a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>) prior to burning to release stale Windows filesystem locks during consecutive disc swaps, coupled with automated I/O error dialog detection and retries in ImgBurn. Configurable under <b>Preferences -&gt; Options</b>.</li>"
+            f"<li><b>Write Stall Watchdog &amp; Auto-Recovery:</b> Actively monitors write initialization. If an optical drive stalls at 0% without writing track data, it forcibly terminates the hung engine, flushes OS handles, and automatically retries. Both stall timeout (default: 40s) and retry count (default: 2 retries / 3 attempts total) are configurable in <b>Preferences -&gt; Options</b>. On the final retry attempt, it detects motorized tray drives to physically cycle (eject and reload) the tray to reset firmware and recalibrate lead-in.</li>"
             f"</ul>"
             f"<h2>PRIMARY CHECKSUM VALIDATION &amp; INTEGRITY VERIFICATION</h2>"
             f"<ul>"
@@ -4482,7 +4720,7 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Targeted Mount Probing:</b> Post-burn verification applies the identical Primary Checksum rule, scanning root and depth-1 folders only. This prevents accidental false matches on nested test checksum files.</li>"
             f"<li><b>Pre-Burn Verification Time Estimation:</b> Accurately estimates verify duration prior to launch using physical media read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead.</li>"
             f"<li><b>Persistent Session Total:</b> Total session estimated duration is locked at launch (0%) and persists across both burning and verification phases for a smooth, jitter-free countdown.</li>"
-            f"<li><b>Thermal Cooldown &amp; Software Cache Flush:</b> Following burn completion, a 25-second cooldown allows the optical pickup unit and laser diode to thermally stabilize, followed by a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>) to force Windows to drop cached sector allocations without requiring physical tray ejection.</li>"
+            f"<li><b>Thermal Cooldown &amp; Software Cache Flush:</b> Following burn completion, an optical cooldown pause allows the optical pickup unit and laser diode to thermally stabilize before switching to verification read mode, followed by a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>). The cooldown pause (default: 25s) can be toggled and configured under <b>Preferences -&gt; Options</b>.</li>"
             f"<li><b>Fast Disc Check (15s Guard):</b> Prior to verification, an asynchronous background check verifies that the disc filesystem and root entries mount successfully within 15 seconds. If media damage or a bad burn prevents mounting, the session aborts cleanly without freezing the UI.</li>"
             f"<li><b>Automated Verification &amp; 20s Stall Watchdog:</b> Performs 100% cryptographic validation via KryptDist against the primary manifest, protected by an active 20-second stall watchdog that automatically terminates frozen reads and reports errors if the optical drive hangs.</li>"
             f"<li><b>Operation Log Summary:</b> Every completed session concludes with a detailed elapsed time summary breakdown (Total Elapsed Time, Burn Duration, and Verification Duration).</li>"
@@ -4994,6 +5232,11 @@ class KryoDiskBurnerApp(QMainWindow):
         custom_cdbxp = self.settings.value("custom_cdbxpcmd_path", "")
         custom_img = self.settings.value("custom_imgburn_path", "")
 
+        flush_cache = self.settings.value("safeguard_flush_volume_cache", True)
+        stall_retry = self.settings.value("safeguard_stall_retry", True)
+        stall_timeout = int(self.settings.value("safeguard_stall_timeout_sec", 40))
+        max_retries = int(self.settings.value("safeguard_max_retries", 2))
+
         staged_items = self.path_list.get_staged_items()
         self.worker = OpticalBurnWorker(
             drive_id, fallback_letter, staged_items, volume_label=vol_label,
@@ -5001,7 +5244,11 @@ class KryoDiskBurnerApp(QMainWindow):
             finalize_disc=finalize_done,
             custom_cdbxpcmd_path=custom_cdbxp,
             custom_imgburn_path=custom_img,
-            estimated_verify_sec=estimated_verify_sec
+            estimated_verify_sec=estimated_verify_sec,
+            flush_volume_cache=flush_cache,
+            stall_retry_enabled=stall_retry,
+            stall_timeout_sec=stall_timeout,
+            max_retries=max_retries
         )
         self.worker.total_payload_bytes = total_bytes
         engine_str = "cdbxpcmd" if "cdbxp" in self.combo_engine.currentText().lower() else "imgburn"
@@ -5342,10 +5589,16 @@ class KryoDiskBurnerApp(QMainWindow):
                 self.refresh_drives()
                 return
 
+            flush_cache = self.settings.value("safeguard_flush_volume_cache", True)
+            cool_enabled = self.settings.value("safeguard_laser_cooldown", True)
+            cool_sec = int(self.settings.value("safeguard_cooldown_sec", 25)) if cool_enabled else 0
+
             self.lbl_burn_status.setText("Status: Probing disc filesystem (15s limit)...")
             self.btn_burn_cancel.setText("Cancel Check")
             self.btn_burn_cancel.setEnabled(True)
-            self.probe_worker = DiscMountProbeWorker(drive_letter, timeout_sec=15)
+            self.probe_worker = DiscMountProbeWorker(
+                drive_letter, timeout_sec=15, cooldown_sec=cool_sec, flush_volume_cache=flush_cache
+            )
             self.probe_worker.status_update.connect(lambda s: self.lbl_burn_status.setText(s))
             self.probe_worker.log_message.connect(self.append_burn_log)
             self.probe_worker.probe_finished.connect(
