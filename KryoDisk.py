@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.10.21__15.57.23
+# VERSION: 2026.10.22__07.19.53
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.10.21__15.57.23"
+APP_VERSION = "2026.10.22__07.19.53"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -423,14 +423,97 @@ def get_optical_drives():
 
             vendor_id = ""
             product_id = ""
-            try:
-                vendor_id = str(recorder.VendorId).strip()
-            except Exception:
-                pass
-            try:
-                product_id = str(recorder.ProductId).strip()
-            except Exception:
-                pass
+
+            # Attempt direct standard SCSI INQUIRY (0x12) to query true hardware model (bypassing USB bridge / cached OS descriptors)
+            scsi_model_found = False
+            clean_letter = drive_letter.rstrip('\\')
+            if clean_letter and sys.platform == "win32" and len(clean_letter) == 2 and clean_letter[1] == ':':
+                try:
+                    from ctypes import wintypes
+                    IOCTL_SCSI_PASS_THROUGH_DIRECT = 0x0004D014
+                    h_scsi = ctypes.windll.kernel32.CreateFileW(
+                        f"\\\\.\\{clean_letter}",
+                        0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
+                        1 | 2,                    # FILE_SHARE_READ | FILE_SHARE_WRITE
+                        None,
+                        3,                        # OPEN_EXISTING
+                        0,
+                        None
+                    )
+                    if h_scsi != -1:
+                        buf_size = 64
+                        data_buf = ctypes.create_string_buffer(buf_size)
+
+                        class _SCSI_PASS_THROUGH_DIRECT(ctypes.Structure):
+                            _fields_ = [
+                                ("Length", wintypes.USHORT),
+                                ("ScsiStatus", ctypes.c_ubyte),
+                                ("PathId", ctypes.c_ubyte),
+                                ("TargetId", ctypes.c_ubyte),
+                                ("Lun", ctypes.c_ubyte),
+                                ("CdbLength", ctypes.c_ubyte),
+                                ("SenseInfoLength", ctypes.c_ubyte),
+                                ("DataIn", ctypes.c_ubyte),
+                                ("DataTransferLength", wintypes.ULONG),
+                                ("TimeOutValue", wintypes.ULONG),
+                                ("DataBuffer", ctypes.c_void_p),
+                                ("SenseInfoOffset", wintypes.ULONG),
+                                ("Cdb", ctypes.c_ubyte * 16),
+                            ]
+
+                        spt = _SCSI_PASS_THROUGH_DIRECT()
+                        spt.Length = ctypes.sizeof(_SCSI_PASS_THROUGH_DIRECT)
+                        spt.CdbLength = 6
+                        spt.DataIn = 1  # SCSI_IOCTL_DATA_IN
+                        spt.DataTransferLength = buf_size
+                        spt.TimeOutValue = 3
+                        spt.DataBuffer = ctypes.cast(data_buf, ctypes.c_void_p)
+                        spt.SenseInfoLength = 0
+                        spt.SenseInfoOffset = 0
+
+                        # SCSI Standard INQUIRY (0x12, EVPD=0)
+                        spt.Cdb[0] = 0x12
+                        spt.Cdb[1] = 0x00
+                        spt.Cdb[2] = 0x00
+                        spt.Cdb[3] = (buf_size >> 8) & 0xFF
+                        spt.Cdb[4] = buf_size & 0xFF
+                        spt.Cdb[5] = 0x00
+
+                        bytes_ret = wintypes.DWORD(0)
+                        ok = ctypes.windll.kernel32.DeviceIoControl(
+                            h_scsi,
+                            IOCTL_SCSI_PASS_THROUGH_DIRECT,
+                            ctypes.byref(spt),
+                            ctypes.sizeof(spt),
+                            ctypes.byref(spt),
+                            ctypes.sizeof(spt),
+                            ctypes.byref(bytes_ret),
+                            None
+                        )
+                        ctypes.windll.kernel32.CloseHandle(h_scsi)
+
+                        if ok and spt.ScsiStatus == 0:
+                            raw_resp = bytes(data_buf[:buf_size])
+                            if len(raw_resp) >= 32:
+                                hw_vendor = raw_resp[8:16].decode('latin1', errors='replace').strip()
+                                hw_product = raw_resp[16:32].decode('latin1', errors='replace').strip()
+                                if hw_product:
+                                    vendor_id = hw_vendor
+                                    product_id = hw_product
+                                    scsi_model_found = True
+                except Exception:
+                    pass
+
+            # Fallback to IMAPI2 COM properties if direct SCSI query was unavailable
+            if not scsi_model_found:
+                try:
+                    vendor_id = str(recorder.VendorId).strip()
+                except Exception:
+                    pass
+                try:
+                    product_id = str(recorder.ProductId).strip()
+                except Exception:
+                    pass
 
             model_str = f"{vendor_id} {product_id}".strip() or "Optical Burner"
             drive_name = f"{drive_letter} [{model_str}]"
@@ -4710,6 +4793,7 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Rewritable Media Policy:</b> Rewritable media (BD-RE, CD-RW, DVD±RW, DVD-RAM) is strictly restricted to <code>-DevDebug</code> mode for development and testing. In DevDebug mode, the capacity gauge evaluates payload against the disc's total erased physical capacity, and the burn button dynamically switches to <b>Erase &amp; Burn Disc</b> to overwrite existing data automatically without requiring manual pre-erasure cycles.</li>"
             f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.) with automatic media recommendations.</li>"
             f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
+            f"<li><b>Direct Hardware Model Discovery:</b> Queries the physical optical drive directly via standard SCSI Pass-Through (<code>IOCTL_SCSI_PASS_THROUGH_DIRECT</code> / <code>INQUIRY 0x12</code>) to detect the true hardware vendor and model, bypassing stale OS driver caches or mismatched USB bridge descriptors.</li>"
             f"<li><b>Rewritable Media Quick Erase (<code>🧹</code>):</b> In DevDebug mode, performs a fast single-pass erase utilizing CDBurnerXP CLI, Windows IMAPI2, and dual primary/backup UDF descriptor zeroing.</li>"
             f"<li><b>Pre-Burn Volume Flush &amp; I/O Auto-Recovery:</b> Issues a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>) prior to burning to release stale Windows filesystem locks during consecutive disc swaps, coupled with automated I/O error dialog detection and retries in ImgBurn. Configurable under <b>Preferences -&gt; Options</b>.</li>"
             f"<li><b>Write Stall Watchdog &amp; Auto-Recovery:</b> Actively monitors write initialization. If an optical drive stalls at 0% without writing track data, it forcibly terminates the hung engine, flushes OS handles, and automatically retries. Both stall timeout (default: 40s) and retry count (default: 2 retries / 3 attempts total) are configurable in <b>Preferences -&gt; Options</b>. On the final retry attempt, it detects motorized tray drives to physically cycle (eject and reload) the tray to reset firmware and recalibrate lead-in.</li>"
