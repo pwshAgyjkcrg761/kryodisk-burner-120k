@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.10.22__07.19.53
+# VERSION: 2026.10.23__09.20.08
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.10.22__07.19.53"
+APP_VERSION = "2026.10.23__09.20.08"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -3643,6 +3643,8 @@ class AddFilesFoldersDialog(QDialog):
         self.tree_right = QTreeView()
         self.tree_right.setModel(self.file_model)
         self.tree_right.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree_right.setRootIsDecorated(False)
+        self.tree_right.setItemsExpandable(False)
         self.tree_right.setSortingEnabled(True)
         self.tree_right.header().setSectionsClickable(True)
         self.tree_right.header().setSortIndicatorShown(True)
@@ -4753,84 +4755,106 @@ class KryoDiskBurnerApp(QMainWindow):
 
         manual_text = (
             f"<h1>KryoDisk Burner 120K v{APP_VERSION}</h1>"
-            f"<p>MANUAL &amp; USAGE GUIDE | Copyright (C) 2026 pwshAgyjkcrg761</p><br>"
-            f"<h2>OVERVIEW</h2>"
-            f"<p><b>KryoDisk Burner 120K</b> is a high-performance optical disc authoring and burning application for Windows. "
-            f"It features primary burning engine support utilizing <b>ImgBurn / ImgBurnPortable</b> to author pure, compliant "
-            f"<b>Universal Disk Format (UDF 2.50 / UDF 2.60)</b> file systems across CD, DVD, Blu-ray (BD-R/RE), and high-capacity BDXL media "
-            f"(up to 128GB Quad-Layer), along with legacy support for <b>CDBurnerXP CLI (cdbxpcmd.exe)</b>.</p>"
-            f"<h2>BURNING ENGINES &amp; PREFERENCES</h2>"
+            f"<p><b>USER MANUAL &amp; OPERATIONAL GUIDE</b> | Copyright (C) 2026 pwshAgyjkcrg761</p><hr>"
+
+            f"<h2>1. QUICK START: BURNING YOUR FIRST DISC</h2>"
+            f"<ol>"
+            f"<li><b>Insert Media &amp; Choose Drive:</b> Insert a blank write-once optical disc (BD-R, DVD-R, or CD-R). "
+            f"Select your burner in the <b>Optical Burner</b> dropdown. The banner will report media type and available capacity in green.</li>"
+            f"<li><b>Stage Files &amp; Folders:</b> Click <b>➕ Add Files &amp; Folders...</b> to select the content you wish to archive. "
+            f"You can also drag and drop items directly into the layout or send them via Windows <i>Send To</i>.</li>"
+            f"<li><b>Name the Disc:</b> Enter a <b>Volume Label</b> (up to 32 characters, e.g., <code>ARCHIVE_2026</code>).</li>"
+            f"<li><b>Check Capacity &amp; Path Status:</b> Ensure the capacity gauge is green and does not say <i>OVER CAPACITY</i>. "
+            f"Verify that the path length indicator reports <code>[OK]</code>.</li>"
+            f"<li><b>Click Burn Disc:</b> Click <b>Burn Disc</b>. The app switches to the live execution view, showing track progress, "
+            f"real-time elapsed time, remaining time, and engine logs.</li>"
+            f"</ol>"
+
+            f"<h2>2. STAGING &amp; ORGANIZING YOUR DISC LAYOUT</h2>"
+            f"<p>KryoDisk features a dual-pane layout builder designed to let you structure the disc independently of how files are named or organized on your computer:</p>"
             f"<ul>"
-            f"<li><b>ImgBurn (long paths) [Default]:</b> Advanced optical authoring engine supporting customizable UDF 2.50 and UDF 2.60 revisions, powered by instant NTFS virtual layout staging and native support for long file paths. All burns are authored strictly as pure UDF (ISO9660 disabled) to eliminate legacy file size and naming restrictions.</li>"
-            f"<li><b>CDBurnerXP CLI:</b> Legacy headless CLI burning engine that formats and burns data discs with live track progress and volume management.</li>"
-            f"<li><b>KryptDist Verifier (KryptDist.py):</b> Integrated cryptographic verification engine for post-burn data validation.</li>"
-            f"<li><b>Preferences (Tools -&gt; Preferences):</b> Divided into three tabs: <b>Engines</b> (configure custom executable/script paths or auto-detect), <b>Options</b> (configure <b>Hardware &amp; Drive Safeguards</b> such as pre-burn volume cache flushing, write stall auto-retry timeouts, and laser thermal cooldown durations), and <b>Notifications</b> (configure spoken audio alerts, voices, and individual event toggles).</li>"
-            f"<li><b>Headless &amp; Silent Burning:</b> ImgBurn is executed on an isolated hidden Win32 desktop with sub-frame 10ms prompt automation and off-screen positioning, suppressing startup splash screens, overwrite prompts, and focus stealing completely.</li>"
-            f"<li><b>Voice Notifications:</b> Spoken audio alerts powered by Kokoro TTS with customizable voices (<b>River</b> [USA female] and <b>Lily</b> [GB female]) for Burn Completed, Burn Completed &amp; Verified, Burn Initialization Failed, Burn Failed, and Verify Failed, along with an audio test button (<b>▶</b>) to preview voices directly. Checking <i>Disable Notification Sounds</i> mutes all alerts and grays out inactive options.</li>"
-            f"<li><b>GUI Themes:</b> Switch between <b>Dark</b>, <b>Light</b>, or <b>System</b> theme under <b>Tools -&gt; Themes</b>.</li>"
+            f"<li><b>Left Tree Pane:</b> Displays the folder hierarchy of the destination disc. Click any folder to inspect its contents in the right table.</li>"
+            f"<li><b>Right Contents Table:</b> Lists files and immediate subfolders inside the selected directory, with individual sizes and original source paths.</li>"
+            f"<li><b>Creating New Folders:</b> Select a folder in the left tree and click <b>📁 New Folder</b> to create a virtual directory on the disc.</li>"
+            f"<li><b>Selective Removal:</b> Highlight any staged file or subfolder and click <b>Remove Selected</b> (or press <code>Delete</code>). "
+            f"Removing items from the disc staging layout only unstages them—it <b>never</b> deletes or modifies your original local files.</li>"
+            f"<li><b>Clearing All:</b> Click <b>Clear All</b> to wipe the staged project and reset to an empty disc layout.</li>"
             f"</ul>"
-            f"<h2>DISC STAGING &amp; LAYOUT</h2>"
+
+            f"<h2>3. IN-DISC PATH LENGTHS &amp; UDF RULES</h2>"
+            f"<p>Unlike basic burning tools that fail halfway through due to Windows path limitations, KryoDisk continuously monitors every staged path:</p>"
             f"<ul>"
-            f"<li><b>Dual-Pane Browser:</b> Structure your disc using the left hierarchy tree and right content pane. Create virtual folders, add custom directories, and remove individual files from staged folders freely.</li>"
-            f"<li><b>Adding Data:</b> Use the <b>➕ Add Files &amp; Folders</b> dual-explorer dialog, send items via Windows <b>SendTo</b>, or pass paths on startup.</li>"
-            f"<li><b>In-Disc Path Length Validation:</b> Dynamically monitors staged paths based on active engine:</li>"
-            f"  <ul>"
-            f"    <li><b>ImgBurn (UDF):</b> Evaluates the actual destination path physically recorded on the disc (starting from <code>\\</code>), freeing you from host PC parent directory lengths. Deeply inspects all files, folders, and subfolders to apply exact OSTA UDF rules:</li>"
-            f"      <ul>"
-            f"        <li><b>UDF Unicode (16-bit):</b> When international glyphs (Japanese Kanji/Kana, CJK, Cyrillic, etc.) are present, enforces max <b>127 characters</b> per file/folder name and max <b>511 characters</b> cumulative path length.</li>"
-            f"        <li><b>UDF ASCII / Latin-1 (8-bit):</b> When pure standard characters are present, allows up to <b>254 characters</b> per file/folder name and max <b>1023 characters</b> cumulative path length.</li>"
-            f"      </ul>"
-            f"    <li><b>CDBurnerXP:</b> Enforces dual constraints: OSTA UDF name limits (max 127 characters for Unicode, 254 characters for ASCII) combined with Win32 host limits (under 260 characters for files, under 248 for directories) to prevent file-reading and engine errors during burns.</li>"
-            f"  </ul>"
-            f"<li><b>Session Finalization:</b> Discs are closed and finalized on burn completion to guarantee broad optical drive compatibility and long-term archival data integrity.</li>"
-            f"<li><b>Volume Label:</b> Specify a custom disc label (up to 32 characters in accordance with UDF standards).</li>"
-            f"<li><b>Unicode &amp; International Characters:</b> Full end-to-end UTF-8 / Unicode support across staged layouts, UTF-8 BOM source lists, disc authoring, and post-burn verification (including Japanese [Kanji, Hiragana, Katakana], CJK, Cyrillic, accents, and symbols).</li>"
-            f"<li><b>Capacity Gauging:</b> Real-time capacity bar dynamically compares staged payloads against available disc capacity with overload warnings.</li>"
+            f"<li><b>In-Disc Evaluation (ImgBurn Engine):</b> Paths are evaluated as they will exist <i>physically on the disc</i> starting from the disc root (<code>\\</code>). "
+            f"Your deep host PC folders (like <code>C:\\Users\\Name\\Documents\\...</code>) do not count against the disc limits.</li>"
+            f"<li><b>UDF Unicode Limits (16-bit):</b> If any folder or file name contains international characters (such as Japanese Kanji/Kana, Cyrillic, Chinese, accents, or symbols), "
+            f"UDF specifications mandate a maximum of <b>127 characters</b> per item name and <b>511 characters</b> for the cumulative path.</li>"
+            f"<li><b>UDF ASCII Limits (8-bit):</b> For purely standard alphanumeric names, UDF allows up to <b>254 characters</b> per item name and <b>1023 characters</b> cumulative path length.</li>"
+            f"<li><b>Warning Indicator:</b> If any staged file or folder exceeds these limits, the indicator turns red, the offending item is highlighted in red in the table, "
+            f"and the <i>Burn Disc</i> button blocks the burn with a clear summary so you can shorten the folder or filename before wasting a disc.</li>"
             f"</ul>"
-            f"<h2>HARDWARE &amp; MEDIA SUPPORT</h2>"
+
+            f"<h2>4. POST-BURN VERIFICATION (KryptDist)</h2>"
+            f"<p>When <b>Verify Disc After Burn with KryptDist</b> is checked, KryoDisk guarantees 100% data integrity before ejecting:</p>"
             f"<ul>"
-            f"<li><b>Supported Media:</b> Write-once optical media including CD-R, DVD±R, DVD±R DL (Dual Layer), BD-R (25GB), BD-R DL (50GB), BD-R TL (100GB BDXL), and BD-R QL (128GB BDXL).</li>"
-            f"<li><b>Rewritable Media Policy:</b> Rewritable media (BD-RE, CD-RW, DVD±RW, DVD-RAM) is strictly restricted to <code>-DevDebug</code> mode for development and testing. In DevDebug mode, the capacity gauge evaluates payload against the disc's total erased physical capacity, and the burn button dynamically switches to <b>Erase &amp; Burn Disc</b> to overwrite existing data automatically without requiring manual pre-erasure cycles.</li>"
-            f"<li><b>Write Speeds:</b> Configures optimal hardware burning speeds (Auto Maximum, 1x, 2x, 4x, 8x, 16x, etc.) with automatic media recommendations.</li>"
-            f"<li><b>Tray &amp; Disc Controls:</b> Direct hardware controls for disc eject (<code>⏏</code>), motorized tray close (<code>📥</code>), and physical disc inspection (<code>💽</code>).</li>"
-            f"<li><b>Direct Hardware Model Discovery:</b> Queries the physical optical drive directly via standard SCSI Pass-Through (<code>IOCTL_SCSI_PASS_THROUGH_DIRECT</code> / <code>INQUIRY 0x12</code>) to detect the true hardware vendor and model, bypassing stale OS driver caches or mismatched USB bridge descriptors.</li>"
-            f"<li><b>Rewritable Media Quick Erase (<code>🧹</code>):</b> In DevDebug mode, performs a fast single-pass erase utilizing CDBurnerXP CLI, Windows IMAPI2, and dual primary/backup UDF descriptor zeroing.</li>"
-            f"<li><b>Pre-Burn Volume Flush &amp; I/O Auto-Recovery:</b> Issues a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>) prior to burning to release stale Windows filesystem locks during consecutive disc swaps, coupled with automated I/O error dialog detection and retries in ImgBurn. Configurable under <b>Preferences -&gt; Options</b>.</li>"
-            f"<li><b>Write Stall Watchdog &amp; Auto-Recovery:</b> Actively monitors write initialization. If an optical drive stalls at 0% without writing track data, it forcibly terminates the hung engine, flushes OS handles, and automatically retries. Both stall timeout (default: 40s) and retry count (default: 2 retries / 3 attempts total) are configurable in <b>Preferences -&gt; Options</b>. On the final retry attempt, it detects motorized tray drives to physically cycle (eject and reload) the tray to reset firmware and recalibrate lead-in.</li>"
+            f"<li><b>Primary Checksum Container:</b> KryptDist looks for a master checksum file (<code>.hash</code>, <code>.b3</code>, <code>.sha256</code>, etc.) "
+            f"located either in the <b>disc root</b> or in an <b>immediate top-level folder</b>.</li>"
+            f"<li><b>Pre-Burn Checksum Guard:</b> If verification is enabled but no primary checksum container is staged, the app alerts you <i>before</i> starting the burn. "
+            f"You can choose to cancel and add your checksum file, or proceed with burning only.</li>"
+            f"<li><b>Thermal Cooldown &amp; Cache Flush:</b> High-power burning heats the optical pickup unit. Once burning completes, KryoDisk pauses briefly "
+            f"(default: 25 seconds) to allow the laser diode to thermally stabilize before switching to high-speed read mode, and issues a volume dismount "
+            f"(<code>FSCTL_DISMOUNT_VOLUME</code>) to flush stale Windows RAM cache so real physical disc sectors are verified.</li>"
+            f"<li><b>Fast 15s Disc Check:</b> Prior to launching full verification, a 15-second background probe verifies that the disc filesystem mounted cleanly. "
+            f"If media damage prevented mounting, verification aborts cleanly without freezing the user interface.</li>"
+            f"<li><b>20s Stall Watchdog:</b> If an optical drive hangs or encounters unreadable sectors during verification, the active watchdog terminates the stalled "
+            f"process after 20 seconds of silence and alerts you with an exact error report.</li>"
             f"</ul>"
-            f"<h2>PRIMARY CHECKSUM VALIDATION &amp; INTEGRITY VERIFICATION</h2>"
+
+            f"<h2>5. HARDWARE SAFEGUARDS &amp; STALL AUTO-RECOVERY</h2>"
+            f"<p>KryoDisk includes specialized hardware protections configured under <b>Tools -&gt; Preferences -&gt; Options</b>:</p>"
             f"<ul>"
-            f"<li><b>Pre-Burn Primary Checksum Guard:</b> When verification is enabled, KryoDisk checks the disc root (depth 0) and immediate top-level folders (depth 1) for a primary checksum manifest (<code>.hash</code>, <code>.b3</code>, <code>.sha256</code>, etc.). If none is found, it prompts the user to either disable verification and proceed with the burn, or cancel to add the container.</li>"
-            f"<li><b>Targeted Mount Probing:</b> Post-burn verification applies the identical Primary Checksum rule, scanning root and depth-1 folders only. This prevents accidental false matches on nested test checksum files.</li>"
-            f"<li><b>Pre-Burn Verification Time Estimation:</b> Accurately estimates verify duration prior to launch using physical media read throughput profiles, head seek latency (~150ms per staged file), and drive remount overhead.</li>"
-            f"<li><b>Persistent Session Total:</b> Total session estimated duration is locked at launch (0%) and persists across both burning and verification phases for a smooth, jitter-free countdown.</li>"
-            f"<li><b>Thermal Cooldown &amp; Software Cache Flush:</b> Following burn completion, an optical cooldown pause allows the optical pickup unit and laser diode to thermally stabilize before switching to verification read mode, followed by a software volume dismount (<code>FSCTL_DISMOUNT_VOLUME</code>). The cooldown pause (default: 25s) can be toggled and configured under <b>Preferences -&gt; Options</b>.</li>"
-            f"<li><b>Fast Disc Check (15s Guard):</b> Prior to verification, an asynchronous background check verifies that the disc filesystem and root entries mount successfully within 15 seconds. If media damage or a bad burn prevents mounting, the session aborts cleanly without freezing the UI.</li>"
-            f"<li><b>Automated Verification &amp; 20s Stall Watchdog:</b> Performs 100% cryptographic validation via KryptDist against the primary manifest, protected by an active 20-second stall watchdog that automatically terminates frozen reads and reports errors if the optical drive hangs.</li>"
-            f"<li><b>Operation Log Summary:</b> Every completed session concludes with a detailed elapsed time summary breakdown (Total Elapsed Time, Burn Duration, and Verification Duration).</li>"
-            f"<li><b>Safe Ejection:</b> If verification is enabled, tray ejection is held until verification completes successfully.</li>"
+            f"<li><b>Pre-Burn Volume Cache Flush:</b> Automatically dismounts the drive volume before burning starts, ensuring that Windows background indexers "
+            f"or locked file handles cannot cause <i>Device Busy</i> or I/O errors.</li>"
+            f"<li><b>Write Stall Auto-Retry Watchdog:</b> Some external USB and SATA drives occasionally stall during track initialization (0%). "
+            f"If the drive stays at 0% without writing track data past the configured timeout (default: 40s), KryoDisk resets handles and retries the burn automatically.</li>"
+            f"<li><b>Motorized Tray Reset:</b> On the final retry attempt, if the burner has a motorized tray, KryoDisk automatically ejects and reloads the tray "
+            f"to force the drive's internal firmware to recalibrate its optical focus and re-read the disc lead-in.</li>"
             f"</ul>"
-            f"<h2>COMMAND LINE FLAGS &amp; DEVDEBUG</h2>"
+
+            f"<h2>6. MEDIA SELECTION &amp; REWRITABLE POLICY</h2>"
             f"<ul>"
-            f"<li><code>-DevDebug</code> &mdash; Enables verbose console logging, unlocks the Quick Erase (<code>🧹</code>) tool for rewritable media, allows total-capacity evaluations on RW discs, and maintains independent session finalization preferences.</li>"
-            f"<li><code>-NoDriveScan</code> (or <code>-NoScan</code> / <code>-SkipDriveScan</code>) &mdash; When used with <code>-DevDebug</code>, bypasses the initial 5-second optical drive query and media spin-up on startup for instantaneous launch.</li>"
+            f"<li><b>Write-Once Media (Standard Mode):</b> CD-R, DVD±R, BD-R (25GB), BD-R DL (50GB), and BDXL TL/QL (100GB/128GB) are recommended for permanent, unalterable cold storage. "
+            f"Discs are automatically finalized on completion.</li>"
+            f"<li><b>Rewritable Media (DevDebug Only):</b> Rewritable media (BD-RE, CD-RW, DVD±RW) is strictly restricted to development mode (<code>-DevDebug</code>). "
+            f"This prevents accidentally relying on temporary rewritable media for long-term cold archives. In DevDebug mode, the burn button automatically switches to "
+            f"<b>Erase &amp; Burn Disc</b> to overwrite existing data without requiring separate erase cycles.</li>"
+            f"<li><b>Quick Erase Tool (<code>🧹</code>):</b> Available only in DevDebug mode for blanking rewritable test media in seconds.</li>"
             f"</ul>"
-            f"<h2>ENGINE &amp; SCRIPT DISCOVERY</h2>"
+
+            f"<h2>7. AUDIO NOTIFICATIONS &amp; THEMES</h2>"
             f"<ul>"
-            f"<li>Engines and scripts are automatically discovered across:</li>"
-            f"  <ol>"
-            f"    <li>User and System <code>PATH</code> environment variables (including fresh registry additions).</li>"
-            f"    <li><code>KryoDisk-Burner-120K_internal\\bin\\</code> directories.</li>"
-            f"    <li><code>C:\\tools\\</code> and <code>C:\\scripts\\</code> standard tool directories.</li>"
-            f"    <li>Custom configured paths in <b>Tools -&gt; Preferences -&gt; Engines</b>.</li>"
-            f"  </ol>"
+            f"<li><b>Spoken Voice Alerts:</b> Natural spoken notifications powered by Kokoro TTS announce session results (e.g., <i>Burn Completed &amp; Verified</i>, <i>Burn Failed</i>). "
+            f"You can choose between <b>River</b> (USA) and <b>Lily</b> (Great Britain) under <b>Tools -&gt; Preferences -&gt; Notifications</b>.</li>"
+            f"<li><b>Voice Preview:</b> Click the <b>▶</b> button next to the voice dropdown to test audio playback.</li>"
+            f"<li><b>Muting:</b> Check <i>Disable Notification Sounds</i> to mute all audio chimes and dialog beeps completely.</li>"
+            f"<li><b>Color Themes:</b> Select <b>Dark</b>, <b>Light</b>, or <b>System</b> theme under <b>Tools -&gt; Themes</b>.</li>"
             f"</ul>"
-            f"<h2>SYSTEM REQUIREMENTS &amp; DEPENDENCIES</h2>"
+
+            f"<h2>8. TROUBLESHOOTING &amp; FREQUENTLY ASKED QUESTIONS</h2>"
             f"<ul>"
-            f"<li><b>Operating System:</b> Windows 10, Windows 11, or Windows Server (64-bit).</li>"
-            f"<li><b>Python Runtime:</b> Python 3.14.5 or higher.</li>"
-            f"<li><b>Required Python Packages:</b> <code>PyQt6</code> (GUI framework) and <code>pywin32</code> (optical COM interface).</li>"
-            f"<li><b>Hardware:</b> Any compatible internal (SATA/ATAPI) or external (USB) optical burner drive.</li>"
+            f"<li><b>Q: The drive dropdown says 'No Optical Drives Detected'.</b><br>"
+            f"<i>Fix:</i> Check USB/SATA cables, ensure the drive is powered on, and click the refresh button (<b>🔄</b>). "
+            f"Ensure your Windows user account has permission to access optical burner devices.</li>"
+            f"<li><b>Q: Status says 'Disc Finalized / Read-Only (Free: 0 B)'.</b><br>"
+            f"<i>Fix:</i> The disc in the drive has already been closed. Write-once media (BD-R/DVD-R) cannot be reused once finalized. "
+            f"Eject the disc with <b>⏏</b> and insert a fresh, blank disc.</li>"
+            f"<li><b>Q: Why does the burn button say 'Path Length Limit Exceeded'?</b><br>"
+            f"<i>Fix:</i> One or more staged files or folders have names longer than the UDF standard permits. Hover over the red warning label "
+            f"or inspect the highlighted items in red in the contents table, then shorten their folder or file names.</li>"
+            f"<li><b>Q: Verification failed with 'Disc check failed (15s limit)'.</b><br>"
+            f"<i>Fix:</i> The drive completed burning the track, but Windows was unable to mount or read the resulting filesystem table. "
+            f"This typically indicates a bad disc blank, dirty optical lens, or excessive burning speed. Try burning at a lower speed (e.g., 4x for BD-R).</li>"
+            f"<li><b>Q: How can I view what is physically recorded on the disc?</b><br>"
+            f"<i>Fix:</i> Click the <b>💽</b> (Browse Disc) button on the main toolbar to open the built-in read-only disc explorer.</li>"
             f"</ul>"
         )
 
@@ -4846,13 +4870,41 @@ class KryoDiskBurnerApp(QMainWindow):
     def show_about(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("About")
-        dialog.resize(500, 390)
+        dialog.resize(500, 360)
         
         icon_path = get_resource_path(os.path.join("KryoDisk-Burner-120K_internal", "icons", "kryodisk-burner-120k-icon.svg"))
         if os.path.exists(icon_path):
             dialog.setWindowIcon(QIcon(icon_path))
 
         layout = QVBoxLayout(dialog)
+
+        # Top Header: Icon on the left paired directly with Title & License on the right
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(4, 2, 4, 0)
+        header_layout.setSpacing(14)
+
+        if os.path.exists(icon_path):
+            lbl_icon = QLabel()
+            lbl_icon.setPixmap(QIcon(icon_path).pixmap(56, 56))
+            lbl_icon.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            header_layout.addWidget(lbl_icon)
+
+        lbl_title = QLabel()
+        lbl_title.setTextFormat(Qt.TextFormat.RichText)
+        lbl_title.setOpenExternalLinks(True)
+        lbl_title.setText(
+            f"<h2 style='margin: 0; padding: 0; color: #007acc;'>"
+            f"<a href=\"https://git.disroot.org/pwshAgyjkcrg761/kryodisk-burner-120k\" style=\"color: #007acc; text-decoration: none;\">"
+            f"KryoDisk Burner 120K</a> v{APP_VERSION}</h2>"
+            f"<p style='margin: 4px 0 0 0; line-height: 1.4;'>"
+            f"Copyright (C) 2026 <b>pwshAgyjkcrg761</b> &nbsp;|&nbsp; Licensed under <b>GPLv3</b><br>"
+            f"Official License: <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\" style=\"color: #007acc;\">gnu.org/licenses/gpl-3.0.html</a></p>"
+        )
+        header_layout.addWidget(lbl_title, 1)
+        layout.addLayout(header_layout)
+        layout.addSpacing(4)
+
+        # Full-width text browser utilizing entire horizontal space below the header
         text_browser = QTextBrowser()
         text_browser.setOpenExternalLinks(True)
         text_browser.setStyleSheet("""
@@ -4862,18 +4914,13 @@ class KryoDiskBurnerApp(QMainWindow):
                 color: palette(text);
                 background-color: palette(base);
                 border: none;
-                padding: 10px;
+                padding: 6px;
             }
-            h1 { color: #007acc; font-size: 20px; }
             b { color: #007acc; }
         """)
         
         about_text = (
-            f"<h1><a href=\"https://git.disroot.org/pwshAgyjkcrg761/kryodisk-burner-120k\" style=\"color: #007acc; text-decoration: none;\">KryoDisk Burner 120K</a> v{APP_VERSION}</h1>"
-            "<p>Copyright (C) 2026 <b>pwshAgyjkcrg761</b><br>"
-            "Licensed under <b>GPLv3</b></p>"
-            "<p>Official License: <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">gnu.org/licenses/gpl-3.0.html</a></p>"
-            "<hr>"
+            "<hr style='margin-top: 0;'>"
             "<p><b>Icon Credits:</b><br>"
             "'Fire SVG Vector' by <a href=\"https://www.svgrepo.com/author/dstore/\">dstore</a> via <a href=\"https://www.svgrepo.com/svg/506715/fire\">SVGRepo</a>.<br>"
             "Used under <a href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0 License</a>. Modified by pwshAgyjkcrg761.</p>"
@@ -4882,7 +4929,7 @@ class KryoDiskBurnerApp(QMainWindow):
             "Used under <a href=\"https://creativecommons.org/publicdomain/zero/1.0/\">CC0 License</a>.</p>"
         )
         text_browser.setHtml(about_text)
-        layout.addWidget(text_browser)
+        layout.addWidget(text_browser, 1)
         
         btn_ok = QPushButton("OK")
         btn_ok.clicked.connect(dialog.accept)
