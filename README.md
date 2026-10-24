@@ -94,6 +94,7 @@ KryoDisk incorporates specialized drive safeguards configured under **Tools > Pr
 * **Pre-Burn Volume Cache Flush:** Issues a software volume dismount (`FSCTL_DISMOUNT_VOLUME`) before starting any burn. This releases stale Windows volume locks and handles left by background indexers, eliminating *Device Busy* and `0x80070005` errors.
 * **Write Stall Auto-Retry Watchdog:** Some external USB and SATA burners occasionally stall during lead-in laser calibration (0%). If a drive sits at 0% without writing track data past the timeout threshold (default: 40 seconds), KryoDisk terminates the hung process, flushes device handles, and automatically re-attempts the burn.
 * **Motorized Tray Reset:** On the final retry attempt, if the burner features a motorized tray, KryoDisk executes an automated tray eject and reload cycle. This forces drive firmware to re-seat the disc, recalibrate optical focus, and re-read track geometry before writing.
+* **Adaptive Write Speed Recommendation:** Probes drive firmware tables for supported multipliers and targets optimal optical sweet spots (4x for BD-R, 8x for DVD±R, 2x for BD-RE). If older hardware or specific disc media IDs (MIDs) only support lower speeds (such as legacy Pioneer drives with budget BD-R), it dynamically adapts to `2x (Recommended)` rather than defaulting to Maximum.
 
 ---
 
@@ -137,6 +138,9 @@ To prevent accidental reliance on volatile, phase-change rewritable media for lo
 ### Q: Verification fails with "Disc check failed (15s limit)".
 * **Solution:** The drive completed burning the track, but Windows was unable to mount or read the resulting filesystem table. This typically indicates a low-grade disc blank, an aging optical laser, or burning at excessive write speeds. Try burning at a lower multiplier (e.g., 4x for BD-R).
 
+### Q: Why is 2x recommended instead of 4x on my drive?
+* **Solution:** Some drives (such as legacy Pioneer burners) lack calibrated 4x/6x write strategies in their firmware for certain disc media IDs (e.g., budget Ritek BD-R) and only report 2x to the operating system. KryoDisk automatically detects this firmware constraint and pre-selects 2x to ensure burning reliability.
+
 ### Q: Can I inspect what is physically recorded on a burned disc?
 * **Solution:** Click the physical disc browser icon (**💽**) on the main toolbar. This opens a read-only explorer dialog that traverses the live optical media directly from your drive.
 
@@ -158,7 +162,7 @@ To prevent accidental reliance on volatile, phase-change rewritable media for lo
 | **Guaranteed Session Finalization** | Finalizes disc sessions on completion to ensure long-term archival data integrity. |
 | **Hardware Tray Controls** | Direct software-driven drive tray eject (⏏) and motorized tray close (📥) commands. |
 | **Direct Hardware Discovery** | Queries physical drive via standard SCSI Pass-Through (`INQUIRY 0x12`) to detect true vendor/model past OS/USB bridge caches. |
-| **Hardware Speed Descriptors** | Queries drive firmware for supported disc write multipliers with recommended presets. |
+| **Adaptive Speed Descriptors** | Queries drive firmware tables for supported write multipliers with adaptive sweet-spot presets and legacy drive/media fallback (e.g., auto-falling back to 2x for vintage Pioneer drives on BD-R). |
 | **Pre-Burn Verify Estimation** | Models physical optical throughput, seek latencies, and remount overhead for accurate pre-burn ETAs. |
 | **Persistent Session Countdown**| Establishes a 0% baseline session estimate that persists jitter-free across both burn and verify phases. |
 | **Primary Checksum Guard** | Validates presence of a primary `.hash` at disc root or depth-1 folders before burning; prevents false matches on nested files. |
@@ -239,4 +243,4 @@ This software is released under the **GNU General Public License v3**.
 ---
 > **Document Control**<br>
 > *This document is up-to-date with the following version of KryoDisk Burner 120K™.*<br>
-> *2026.10.23__09.20.08*
+> *2026.10.24__09.10.38*
