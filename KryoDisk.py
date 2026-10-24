@@ -1,6 +1,6 @@
 # ==============================================================================
 # SCRIPT: KryoDisk.py
-# VERSION: 2026.10.23__09.20.08
+# VERSION: 2026.10.24__09.10.38
 # TARGET: Python 3.14.5
 #
 # Copyright (C) 2026 pwshAgyjkcrg761
@@ -70,7 +70,7 @@ import json
 import re
 import ctypes
 
-APP_VERSION = "2026.10.23__09.20.08"
+APP_VERSION = "2026.10.24__09.10.38"
 
 DEV_DEBUG = any(arg.lower() in ("-devdebug", "--devdebug", "/devdebug") for arg in sys.argv)
 
@@ -4422,6 +4422,15 @@ class KryoDiskBurnerApp(QMainWindow):
             else:
                 speed_items = [(f"{x}x", -1) for x in [24, 16, 12, 8, 6, 4, 2, 1]]
 
+        # Resolve adaptive recommendation if primary target is not supported by drive firmware
+        avail_labels = [item[0] for item in speed_items]
+        if rec_spd not in avail_labels:
+            if rec_spd == "4x" and "2x" in avail_labels:
+                rec_spd = "2x"
+            elif speed_items:
+                rec_spd = speed_items[-1][0]
+        self.recommended_speed = rec_spd
+
         rec_idx = -1
         for label, sec in speed_items:
             if label == rec_spd:
@@ -4432,6 +4441,8 @@ class KryoDiskBurnerApp(QMainWindow):
 
         if rec_idx >= 0:
             self.combo_speed.setCurrentIndex(rec_idx)
+        elif self.combo_speed.count() > 1:
+            self.combo_speed.setCurrentIndex(self.combo_speed.count() - 1)
         else:
             self.combo_speed.setCurrentIndex(0)
 
@@ -4818,6 +4829,9 @@ class KryoDiskBurnerApp(QMainWindow):
             f"If the drive stays at 0% without writing track data past the configured timeout (default: 40s), KryoDisk resets handles and retries the burn automatically.</li>"
             f"<li><b>Motorized Tray Reset:</b> On the final retry attempt, if the burner has a motorized tray, KryoDisk automatically ejects and reloads the tray "
             f"to force the drive's internal firmware to recalibrate its optical focus and re-read the disc lead-in.</li>"
+            f"<li><b>Adaptive Write Speed Recommendation:</b> Probes drive firmware capabilities for the inserted media and recommends the optical sweet spot "
+            f"(4x for BD-R, 8x for DVD±R, 2x for BD-RE). If older drive firmware or specific media IDs only support lower speeds (such as 2x on legacy Pioneer drives), "
+            f"it dynamically adapts and selects <code>2x (Recommended)</code> instead of defaulting to Maximum.</li>"
             f"</ul>"
 
             f"<h2>6. MEDIA SELECTION &amp; REWRITABLE POLICY</h2>"
@@ -4853,6 +4867,9 @@ class KryoDiskBurnerApp(QMainWindow):
             f"<li><b>Q: Verification failed with 'Disc check failed (15s limit)'.</b><br>"
             f"<i>Fix:</i> The drive completed burning the track, but Windows was unable to mount or read the resulting filesystem table. "
             f"This typically indicates a bad disc blank, dirty optical lens, or excessive burning speed. Try burning at a lower speed (e.g., 4x for BD-R).</li>"
+            f"<li><b>Q: Why is 2x recommended instead of 4x on my drive?</b><br>"
+            f"<i>Fix:</i> Some drives (such as legacy Pioneer models) lack calibrated 4x/6x write strategy tables in their firmware for certain "
+            f"media brands (like budget Ritek BD-R) and only report 2x to Windows. KryoDisk automatically detects this and selects 2x to ensure write reliability.</li>"
             f"<li><b>Q: How can I view what is physically recorded on the disc?</b><br>"
             f"<i>Fix:</i> Click the <b>💽</b> (Browse Disc) button on the main toolbar to open the built-in read-only disc explorer.</li>"
             f"</ul>"
